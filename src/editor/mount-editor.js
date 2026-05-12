@@ -846,7 +846,7 @@ export const mountEditor = (root) => {
             </div>
           </details>
         </aside>
-        <div class="editor__main">
+        <div class="editor__main" id="editor-main" role="main">
           <div class="editor__grid-wrap" data-grid-wrap>
             <div class="editor__grid" role="grid" aria-label="Level grid" aria-rowcount="${GRID_HEIGHT}" aria-colcount="${GRID_WIDTH}"></div>
           </div>
