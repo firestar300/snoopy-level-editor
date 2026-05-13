@@ -20,28 +20,28 @@ body {
 .editor__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid #1e2433;
   background: #121620;
 }
 
-.editor__header h1 {
+.editor__header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.editor__header-title h1 {
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
 }
 
-.editor__header-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: #8b95ab;
-  font-size: 0.85rem;
-}
-
-.editor__header-meta img {
+.editor__header-logo {
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   image-rendering: pixelated;
@@ -1285,12 +1285,6 @@ label.editor__btn--sidebar-import:focus-within {
     padding-top: max(0.6rem, env(safe-area-inset-top));
   }
 
-  .editor__header-meta {
-    font-size: 0.74rem;
-    line-height: 1.35;
-    max-width: 100%;
-  }
-
   .editor__tile-toolbar {
     padding: 0.4rem max(0.65rem, env(safe-area-inset-left)) 0.5rem max(0.65rem, env(safe-area-inset-right));
     scrollbar-width: thin;
@@ -1544,12 +1538,8 @@ label.editor__btn--sidebar-import:focus-within {
 }
 
 @media (max-width: 480px) {
-  .editor__header h1 {
+  .editor__header-title h1 {
     font-size: 1rem;
-  }
-
-  .editor__header-meta span strong {
-    font-weight: 600;
   }
 }
 

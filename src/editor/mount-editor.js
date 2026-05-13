@@ -1053,10 +1053,16 @@ export const mountEditor = (root) => {
   root.innerHTML = `
     <div class="editor">
       <header class="editor__header">
-        <h1>Snoopy's Magic Show — Level Editor</h1>
-        <div class="editor__header-meta">
-          <img src="${publicAssetUrl('images/favicon.png')}" width="28" height="28" alt="" />
-          <span>JSON compatible with <strong>snoopys-magic-show</strong></span>
+        <div class="editor__header-title">
+          <img
+            class="editor__header-logo"
+            src="${publicAssetUrl('images/favicon.png')}"
+            width="28"
+            height="28"
+            alt=""
+            decoding="async"
+          />
+          <h1>Snoopy's Magic Show — Level Editor</h1>
         </div>
       </header>
       <div class="editor__tile-toolbar" role="region" aria-label="Tiles and entities">
