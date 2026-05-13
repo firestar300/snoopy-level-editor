@@ -39,6 +39,11 @@ import {
   removeWorldStageAt,
   serializeProjectForExport,
 } from '../level/world-project.js';
+import {
+  getPlayGameBaseUrl,
+  openPlayGameInNewTab,
+  queueWorldPayloadForGame,
+} from '../play-in-game-bridge.js';
 import { publicAssetUrl } from '../public-asset-url.js';
 import { getEntitySpriteStyle, getSnoopyStartMarkerStyle } from './entity-sprites.js';
 import { getGbSpriteUrl, SPRITE_BLOCKS } from './gb-sprite-urls.js';
@@ -1064,6 +1069,17 @@ export const mountEditor = (root) => {
           />
           <h1>Snoopy's Magic Show — Level Editor</h1>
         </div>
+        <div class="editor__header-actions">
+          <button
+            type="button"
+            class="editor__btn editor__btn--play-now"
+            data-action="world-play-now"
+            disabled
+          >
+            <span class="material-symbols-outlined editor__btn--play-now-icon" aria-hidden="true">play_arrow</span>
+            Play now
+          </button>
+        </div>
       </header>
       <div class="editor__tile-toolbar" role="region" aria-label="Tiles and entities">
         <div class="editor__tile-toolbar-inner"></div>
@@ -1402,6 +1418,7 @@ export const mountEditor = (root) => {
     musicPreview: root.querySelector('#fld-music-preview'),
     fldJson: root.querySelector('#fld-json'),
     fldWorldName: root.querySelector('#fld-world-name'),
+    btnWorldPlayNow: root.querySelector('[data-action="world-play-now"]'),
     btnWorldDownload: root.querySelector('[data-action="world-download"]'),
     worldStagesRow: root.querySelector('[data-world-stages-row]'),
     btnWorldAddStage: root.querySelector('[data-action="world-add-stage"]'),
@@ -1465,6 +1482,11 @@ export const mountEditor = (root) => {
         .replace(/[^\w\-]+/g, '-')
         .slice(0, 40) || 'world';
     downloadJson(`${safe}.json`, serializeProjectForExport(state));
+  });
+  els.btnWorldPlayNow?.addEventListener('click', () => {
+    if (!allWorldStagesValid(state)) return;
+    queueWorldPayloadForGame(serializeProjectForExport(state));
+    openPlayGameInNewTab();
   });
   els.btnWorldAddStage?.addEventListener('click', () => {
     if (!allWorldStagesValid(state)) return;
@@ -2689,8 +2711,14 @@ export const mountEditor = (root) => {
       els.btnClearStageOpen.disabled = pristine;
       els.btnClearStageOpen.title = pristine ? 'Nothing to clear — the stage is already empty.' : '';
     }
+    const worldOk = allWorldStagesValid(state);
+    if (els.btnWorldPlayNow) {
+      els.btnWorldPlayNow.disabled = !worldOk;
+      els.btnWorldPlayNow.title = worldOk
+        ? `Open the game in a new tab and play this world (${getPlayGameBaseUrl()})`
+        : 'Fix all stages before playing — same rules as download.';
+    }
     if (els.btnWorldDownload) {
-      const worldOk = allWorldStagesValid(state);
       els.btnWorldDownload.disabled = !worldOk;
       els.btnWorldDownload.title = worldOk
         ? 'Download this world as JSON (all stages)'

@@ -20,8 +20,8 @@ body {
 .editor__header {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 1rem;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid #1e2433;
   background: #121620;
@@ -32,6 +32,14 @@ body {
   align-items: center;
   gap: 0.65rem;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.editor__header-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .editor__header-title h1 {
@@ -45,6 +53,80 @@ body {
   width: 28px;
   height: 28px;
   image-rendering: pixelated;
+}
+
+/**
+ * Prominent CTA — indigo / violet gradient aligned with `.editor__btn--primary` (#4d6eff, #2a3a66 family).
+ */
+.editor__btn.editor__btn--play-now {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.48rem 1.05rem;
+  border: none;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  white-space: nowrap;
+  color: #eef2ff;
+  cursor: pointer;
+  background: linear-gradient(135deg, #2f3d62 0%, #3d4d9a 38%, #4f5ab8 72%, #5c6bc9 100%);
+  box-shadow:
+    0 0 0 1px rgba(100, 140, 255, 0.55),
+    0 2px 0 rgba(0, 0, 0, 0.45),
+    0 6px 22px rgba(60, 90, 200, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    filter 0.16s ease,
+    background 0.16s ease;
+}
+
+.editor__btn.editor__btn--play-now .editor__btn--play-now-icon {
+  font-size: 1.15rem;
+  font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+  margin-inline: -0.05rem 0;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.editor__btn.editor__btn--play-now:hover:not(:disabled) {
+  filter: brightness(1.1) saturate(1.08);
+  background: linear-gradient(135deg, #384a72 0%, #4a58b0 38%, #5a66c8 72%, #6a78d8 100%);
+  box-shadow:
+    0 0 0 1px rgba(130, 165, 255, 0.65),
+    0 2px 0 rgba(0, 0, 0, 0.35),
+    0 8px 28px rgba(80, 110, 230, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.editor__btn.editor__btn--play-now:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.94) saturate(0.95);
+  box-shadow:
+    0 0 0 1px rgba(90, 120, 220, 0.45),
+    0 1px 0 rgba(0, 0, 0, 0.5),
+    0 3px 14px rgba(40, 60, 140, 0.35),
+    inset 0 2px 6px rgba(0, 0, 0, 0.22);
+}
+
+.editor__btn.editor__btn--play-now:focus-visible {
+  outline: 2px solid #8aa8ff;
+  outline-offset: 3px;
+}
+
+.editor__btn.editor__btn--play-now:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: #a8b0c4;
+  filter: saturate(0.45) brightness(0.88);
+  background: linear-gradient(135deg, #252b3d 0%, #2c3350 100%);
+  box-shadow: 0 0 0 1px rgba(70, 80, 110, 0.45);
+  transform: none;
 }
 
 .editor__body {
@@ -1278,11 +1360,22 @@ label.editor__btn--sidebar-import:focus-within {
   }
 
   .editor__header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.45rem;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 0.75rem;
     padding: 0.6rem max(1rem, env(safe-area-inset-left)) 0.6rem max(1rem, env(safe-area-inset-right));
     padding-top: max(0.6rem, env(safe-area-inset-top));
+  }
+
+  .editor__header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .editor__header-title {
+    flex: 1 1 10rem;
+    min-width: 0;
   }
 
   .editor__tile-toolbar {
@@ -1541,6 +1634,11 @@ label.editor__btn--sidebar-import:focus-within {
   .editor__header-title h1 {
     font-size: 1rem;
   }
+
+  .editor__btn.editor__btn--play-now {
+    padding: 0.42rem 0.85rem;
+    font-size: 0.8rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1550,5 +1648,13 @@ label.editor__btn--sidebar-import:focus-within {
 
   .editor__powerup-dir-card {
     transition: none;
+  }
+
+  .editor__btn.editor__btn--play-now {
+    transition: none;
+  }
+
+  .editor__btn.editor__btn--play-now:hover:not(:disabled) {
+    transform: none;
   }
 }
