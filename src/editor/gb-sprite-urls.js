@@ -3,6 +3,8 @@
  * `src/engine/sprite-manager.js` `applyGameBoyPalette`).
  */
 
+import { publicAssetUrl } from '../public-asset-url.js';
+
 const GB_PALETTE = [
   { r: 15, g: 56, b: 15 },
   { r: 48, g: 98, b: 48 },
@@ -10,14 +12,21 @@ const GB_PALETTE = [
   { r: 155, g: 188, b: 15 },
 ];
 
-/** Sprite paths processed for the editor (under `public/sprites/`). */
+export const SPRITE_BLOCKS = publicAssetUrl('sprites/blocks.png');
+export const SPRITE_WOODSTOCK = publicAssetUrl('sprites/woodstock.png');
+export const SPRITE_BALL = publicAssetUrl('sprites/ball.png');
+export const SPRITE_SPIKE = publicAssetUrl('sprites/spike.png');
+export const SPRITE_POWERUPS = publicAssetUrl('sprites/powerups.png');
+export const SPRITE_SNOOPY = publicAssetUrl('sprites/snoopy.png');
+
+/** Sprite URLs processed for the editor (under `public/sprites/`). */
 export const GB_SPRITE_PATHS = [
-  '/sprites/blocks.png',
-  '/sprites/woodstock.png',
-  '/sprites/ball.png',
-  '/sprites/spike.png',
-  '/sprites/powerups.png',
-  '/sprites/snoopy.png',
+  SPRITE_BLOCKS,
+  SPRITE_WOODSTOCK,
+  SPRITE_BALL,
+  SPRITE_SPIKE,
+  SPRITE_POWERUPS,
+  SPRITE_SNOOPY,
 ];
 
 const processedUrlByPath = new Map();

@@ -1,4 +1,11 @@
-import { getGbSpriteUrl } from './gb-sprite-urls.js';
+import {
+  getGbSpriteUrl,
+  SPRITE_BALL,
+  SPRITE_POWERUPS,
+  SPRITE_SNOOPY,
+  SPRITE_SPIKE,
+  SPRITE_WOODSTOCK,
+} from './gb-sprite-urls.js';
 
 /**
  * CSS background clipping for sprite sheets (same regions as game sprite-manager).
@@ -40,15 +47,15 @@ export const getEntitySpriteStyle = (entityType, opts = {}) => {
   const outSize = opts.outSize;
   switch (entityType) {
     case 'woodstock':
-      return clipSheet('/sprites/woodstock.png', 16, 16, 0, 0, 16, 16, outSize ?? 32, outSize ?? 32);
+      return clipSheet(SPRITE_WOODSTOCK, 16, 16, 0, 0, 16, 16, outSize ?? 32, outSize ?? 32);
     case 'ball':
-      return clipSheet('/sprites/ball.png', 29, 8, 0, 0, 8, 8, outSize ?? 18, outSize ?? 18);
+      return clipSheet(SPRITE_BALL, 29, 8, 0, 0, 8, 8, outSize ?? 18, outSize ?? 18);
     case 'spike':
-      return clipSheet('/sprites/spike.png', 144, 32, 0, 0, 16, 16, outSize ?? 32, outSize ?? 32);
+      return clipSheet(SPRITE_SPIKE, 144, 32, 0, 0, 16, 16, outSize ?? 32, outSize ?? 32);
     case 'powerup': {
       const s = outSize ?? 32;
       return clipSheet(
-        '/sprites/powerups.png',
+        SPRITE_POWERUPS,
         64,
         16,
         powerTypeToSx(powerType),
@@ -66,4 +73,4 @@ export const getEntitySpriteStyle = (entityType, opts = {}) => {
 
 /** Idle Snoopy facing down, frame 0 — same slice as sprite-manager `drawSnoopy` direction 1, frame 0. */
 export const getSnoopyStartMarkerStyle = (outPx = 32) =>
-  clipSheet('/sprites/snoopy.png', 144, 32, 0, 0, 16, 16, outPx, outPx);
+  clipSheet(SPRITE_SNOOPY, 144, 32, 0, 0, 16, 16, outPx, outPx);

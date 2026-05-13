@@ -39,8 +39,9 @@ import {
   removeWorldStageAt,
   serializeProjectForExport,
 } from '../level/world-project.js';
+import { publicAssetUrl } from '../public-asset-url.js';
 import { getEntitySpriteStyle, getSnoopyStartMarkerStyle } from './entity-sprites.js';
-import { getGbSpriteUrl } from './gb-sprite-urls.js';
+import { getGbSpriteUrl, SPRITE_BLOCKS } from './gb-sprite-urls.js';
 import './editor.css';
 
 /** Cell characters allowed in Select mode for the sidebar (all level tiles from schema). */
@@ -67,7 +68,7 @@ const STAGE_PREVIEW_TILE_HEX = {
   E: '#7a9444',
 };
 
-const BLOCKS_SPRITE_PATH = '/sprites/blocks.png';
+const BLOCKS_SPRITE_PATH = SPRITE_BLOCKS;
 const BLOCKS_SHEET_W = 144;
 const BLOCKS_SHEET_H = 32;
 const BLOCKS_FRAME = 16;
@@ -1052,9 +1053,9 @@ export const mountEditor = (root) => {
   root.innerHTML = `
     <div class="editor">
       <header class="editor__header">
-        <h1>Snoopy level editor</h1>
+        <h1>Snoopy's Magic Show — Level Editor</h1>
         <div class="editor__header-meta">
-          <img src="/images/favicon.png" width="28" height="28" alt="" />
+          <img src="${publicAssetUrl('images/favicon.png')}" width="28" height="28" alt="" />
           <span>JSON compatible with <strong>snoopys-magic-show</strong></span>
         </div>
       </header>
