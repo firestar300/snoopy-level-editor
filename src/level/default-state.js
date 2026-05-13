@@ -28,10 +28,18 @@ export const createInitialState = () => ({
   /** Next grid click sets blockBrushPortalDestination and clears. */
   blockBrushPickingPortalExit: false,
   /**
-   * Tile indices for hidden power-up effect (pushable embed or breakable bonus); written as `destinationX` / `destinationY` on the entity.
+   * Per reveal direction (`up` / `down` / `left` / `right`): bonus exit tile `{ x, y }` (game JSON `targets`).
+   * Pushable blocks use push direction; breakable blocks use Snoopy facing when breaking.
    */
-  blockBrushHiddenPowerupDestination: { destinationX: 4, destinationY: 4 },
-  /** Next grid click sets blockBrushHiddenPowerupDestination and clears. */
+  blockBrushHiddenPowerupTargets: {
+    up: { x: 4, y: 4 },
+    down: { x: 4, y: 4 },
+    left: { x: 4, y: 4 },
+    right: { x: 4, y: 4 },
+  },
+  /** Next grid click applies to all directions when null, else only this direction key. */
+  blockBrushPickingHiddenPowerupExitDir: null,
+  /** Next grid click updates `blockBrushHiddenPowerupTargets` then clears. */
   blockBrushPickingHiddenPowerupExit: false,
   /**
    * Hidden bonus on breakable tile (`3`): none, invincible, speed, or timer (`powerType: 'time'`).

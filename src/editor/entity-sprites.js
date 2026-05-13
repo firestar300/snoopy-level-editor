@@ -1,8 +1,11 @@
+import { getGbSpriteUrl } from './gb-sprite-urls.js';
+
 /**
  * CSS background clipping for sprite sheets (same regions as game sprite-manager).
  */
 
-const clipSheet = (url, sheetW, sheetH, sx, sy, sw, sh, outW, outH) => {
+const clipSheet = (path, sheetW, sheetH, sx, sy, sw, sh, outW, outH) => {
+  const url = getGbSpriteUrl(path);
   const bgw = (sheetW * outW) / sw;
   const bgh = (sheetH * outH) / sh;
   const posX = (sx * outW) / sw;
