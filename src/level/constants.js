@@ -27,8 +27,8 @@ const TILE_META_LIST = [
   { char: '1', label: 'Wall', sheet: { sx: 96, sy: 0 } },
   { char: '2', label: 'All directions', sheet: { sx: 96, sy: 0 } },
   { char: '3', label: 'Breakable', sheet: { sx: 112, sy: 0 } },
-  { char: '4', label: 'Teleporter A', sheet: { sx: 80, sy: 16 } },
-  { char: '5', label: 'Teleporter B', sheet: { sx: 80, sy: 16 } },
+  { char: '4', label: 'Teleporter', sheet: { sx: 80, sy: 16 } },
+  { char: '5', label: 'Teleporter (legacy)', sheet: { sx: 80, sy: 16 } },
   { char: '6', label: 'Arrow up', sheet: { sx: 16, sy: 16 } },
   { char: '7', label: 'Arrow right', sheet: { sx: 48, sy: 16 } },
   { char: '8', label: 'Arrow down', sheet: { sx: 32, sy: 16 } },
@@ -43,7 +43,27 @@ const TILE_META_LIST = [
 export const TILE_BY_CHAR = Object.fromEntries(TILE_META_LIST.map((t) => [t.char, t]));
 
 /**
- * Tile toolbar: horizontal groups.
+ * Pushable-only toolbar shortcuts after the main Wall / pushable brush (all dirs, ←, →, ↑, ↓).
+ * Used to avoid duplicate aria-pressed on the main brush when a shortcut is active.
+ */
+export const BLOCK_PUSHABLE_TOOLBAR_SHORTCUT_CHARS = Object.freeze(['2', 'C', 'D', 'A', 'B']);
+
+export const isBlockPushableToolbarShortcutChar = (c) =>
+  BLOCK_PUSHABLE_TOOLBAR_SHORTCUT_CHARS.includes(c);
+
+/** Tile toolbar entries for pushable shortcuts (sprite + label from `BLOCK_BRUSH_VARIANTS`). */
+export const BLOCK_PUSHABLE_TOOLBAR_TILES = BLOCK_PUSHABLE_TOOLBAR_SHORTCUT_CHARS.map((char) => {
+  const meta = TILE_BY_CHAR[char];
+  const variant = BLOCK_BRUSH_VARIANTS.find((o) => o.value === char);
+  return {
+    char,
+    label: variant?.label ?? meta?.label ?? char,
+    sheet: meta?.sheet ?? { sx: 96, sy: 0 },
+  };
+});
+
+/**
+ * Tile toolbar: horizontal groups (wall / pushable brush, breakable, toggle, teleporter, arrows).
  * `kind: 'block'` = single button (always shows wall sprite); painting char comes from `blockVariant` state.
  */
 export const TILE_TOOLBAR_GROUPS = [
@@ -52,22 +72,10 @@ export const TILE_TOOLBAR_GROUPS = [
     label: 'Blocks',
     tiles: [
       { kind: 'block', label: 'Wall / pushable', sheet: { sx: 96, sy: 0 } },
+      ...BLOCK_PUSHABLE_TOOLBAR_TILES,
       { char: '3', label: 'Breakable', sheet: { sx: 112, sy: 0 } },
       { char: 'E', label: 'Toggle block', sheet: 'toggle-passable' },
-    ],
-  },
-  {
-    id: 'teleport',
-    label: 'Teleport',
-    tiles: [
-      { char: '4', label: 'Teleporter A', sheet: { sx: 80, sy: 16 } },
-      { char: '5', label: 'Teleporter B', sheet: { sx: 80, sy: 16 } },
-    ],
-  },
-  {
-    id: 'arrows',
-    label: 'Arrows',
-    tiles: [
+      { char: '4', label: 'Teleporter', sheet: { sx: 80, sy: 16 } },
       { char: '6', label: 'Arrow up', sheet: { sx: 16, sy: 16 } },
       { char: '7', label: 'Arrow right', sheet: { sx: 48, sy: 16 } },
       { char: '8', label: 'Arrow down', sheet: { sx: 32, sy: 16 } },
@@ -160,8 +168,8 @@ export const ENTITY_TOOLBAR_GROUPS = [
     label: 'Entities',
     items: [
       { type: 'woodstock', label: 'Woodstock' },
-      { type: 'spike', label: 'Spike' },
       { type: 'ball', label: 'Ball' },
+      { type: 'spike', label: 'Spike' },
     ],
   },
 ];
@@ -173,9 +181,10 @@ export const ENTITY_TOOLBAR_PLACEMENT_LIMITS = {
   spike: 1,
 };
 
-/** Teleporter A / B tile characters — at most one of each per level. */
+/** Teleporter tile character — pair uses two `4` tiles (max per stage in the editor). */
 export const TELEPORT_TILE_A = '4';
-export const TELEPORT_TILE_B = '5';
+/** Max teleporter (`4`) tiles per stage in the editor (pair). */
+export const TELEPORT_TILE_MAX_PER_STAGE = 2;
 
 export const countTileCharOccurrences = (tiles, ch) =>
   tiles.reduce((n, row) => n + [...String(row)].filter((c) => c === ch).length, 0);

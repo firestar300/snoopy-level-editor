@@ -1,0 +1,164 @@
+import { GRID_HEIGHT, GRID_WIDTH, MUSIC_TRACKS, normalizeMusicPair } from './constants.js';
+import { buildLevelPayload, serializeLevel } from './serialize.js';
+import {
+  applyLevelSliceToState,
+  createEmptyLevelSlice,
+  deepCloneLevelSlice,
+  extractLevelSliceFromState,
+} from './level-slice.js';
+import { validateLevelSlice } from './stage-validation.js';
+
+export const WORLD_FORMAT = 'snoopy-world-v1';
+
+export const DEFAULT_WORLD_NAME = 'Untitled world';
+
+/** Normalize a single game-style level object into a level slice (no editor chrome). */
+export const sliceFromLooseLevelJson = (data) => {
+  const tilesIn = Array.isArray(data?.tiles) ? data.tiles : [];
+  const tiles = [];
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    const row = String(tilesIn[y] || '').replace(/[^0-9A-E]/g, '0');
+    tiles.push(row.padEnd(GRID_WIDTH, '0').slice(0, GRID_WIDTH));
+  }
+  const entities = Array.isArray(data?.entities) ? data.entities.map((e) => ({ ...e })) : [];
+  const audio = normalizeMusicPair(data?.music ?? MUSIC_TRACKS[0]);
+  return {
+    name: data?.name ?? 'Imported',
+    music: audio.music,
+    clearMusic: audio.clearMusic,
+    startPosition: {
+      x: Math.min(GRID_WIDTH - 1, Math.max(0, data?.startPosition?.x ?? 4)),
+      y: Math.min(GRID_HEIGHT - 1, Math.max(0, data?.startPosition?.y ?? 4)),
+    },
+    tiles,
+    entities,
+  };
+};
+
+/**
+ * Copy the active editor level into `state.world.stages[activeStageIndex]`.
+ * @param {object} state
+ */
+export const persistActiveWorldStage = (state) => {
+  const w = state.world;
+  if (!w?.stages?.length) return;
+  const i = w.activeStageIndex;
+  if (i < 0 || i >= w.stages.length) return;
+  w.stages[i] = extractLevelSliceFromState(state);
+};
+
+/**
+ * Persist, then load another stage index into the flat editor fields.
+ * @param {object} state
+ * @param {number} index
+ */
+export const loadWorldStageIndex = (state, index) => {
+  persistActiveWorldStage(state);
+  const w = state.world;
+  if (!w?.stages?.length) return;
+  const i = Math.max(0, Math.min(w.stages.length - 1, index));
+  w.activeStageIndex = i;
+  applyLevelSliceToState(state, w.stages[i]);
+};
+
+/**
+ * Append a new empty stage and switch to it.
+ * @param {object} state
+ */
+export const appendEmptyWorldStage = (state) => {
+  persistActiveWorldStage(state);
+  const nextNum = state.world.stages.length + 1;
+  const neu = createEmptyLevelSlice(nextNum);
+  state.world.stages.push(deepCloneLevelSlice(neu));
+  state.world.activeStageIndex = state.world.stages.length - 1;
+  applyLevelSliceToState(state, state.world.stages[state.world.activeStageIndex]);
+};
+
+/**
+ * Remove a stage by index. At least one stage remains.
+ * @param {object} state
+ * @param {number} removeIdx
+ * @returns {boolean}
+ */
+export const removeWorldStageAt = (state, removeIdx) => {
+  persistActiveWorldStage(state);
+  const w = state.world;
+  if (!w?.stages || w.stages.length <= 1) return false;
+  if (removeIdx < 0 || removeIdx >= w.stages.length) return false;
+  w.stages.splice(removeIdx, 1);
+  let next = w.activeStageIndex;
+  if (removeIdx < w.activeStageIndex) next -= 1;
+  else if (removeIdx === w.activeStageIndex) next = Math.min(removeIdx, w.stages.length - 1);
+  w.activeStageIndex = Math.max(0, next);
+  applyLevelSliceToState(state, w.stages[w.activeStageIndex]);
+  return true;
+};
+
+export const allWorldStagesValid = (state) => {
+  persistActiveWorldStage(state);
+  for (let i = 0; i < state.world.stages.length; i++) {
+    const { valid } = validateLevelSlice(state.world.stages[i]);
+    if (!valid) return false;
+  }
+  return true;
+};
+
+export const firstInvalidWorldStage = (state) => {
+  persistActiveWorldStage(state);
+  for (let i = 0; i < state.world.stages.length; i++) {
+    const { valid, errors } = validateLevelSlice(state.world.stages[i]);
+    if (!valid) return { index: i, errors };
+  }
+  return null;
+};
+
+export const serializeProjectForExport = (state) => {
+  persistActiveWorldStage(state);
+  const w = state.world;
+  if (!w?.stages?.length) return serializeLevel(state);
+  if (w.stages.length === 1) return serializeLevel(state);
+  const stages = w.stages.map((slice) => {
+    const tmp = { ...state, ...slice };
+    return buildLevelPayload(tmp);
+  });
+  const payload = {
+    format: WORLD_FORMAT,
+    name: String(w.name || DEFAULT_WORLD_NAME).trim() || DEFAULT_WORLD_NAME,
+    stages,
+  };
+  return JSON.stringify(payload, null, 2);
+};
+
+/**
+ * If `data` is a multi-stage document, return a `world` object; otherwise `null`.
+ * @param {object} data
+ * @returns {{ world: { name: string, activeStageIndex: number, stages: object[] } } | null}
+ */
+export const parseWorldDocumentFromImportData = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const hasRootTiles = Array.isArray(data.tiles);
+  const isWorld =
+    data.format === WORLD_FORMAT ||
+    (Array.isArray(data.stages) &&
+      data.stages.length > 0 &&
+      typeof data.stages[0] === 'object' &&
+      Array.isArray(data.stages[0].tiles) &&
+      !hasRootTiles);
+  if (!isWorld) return null;
+  if (!Array.isArray(data.stages) || data.stages.length === 0) return null;
+
+  const worldName =
+    typeof data.name === 'string' && data.name.trim()
+      ? data.name.trim()
+      : typeof data.worldName === 'string' && data.worldName.trim()
+        ? data.worldName.trim()
+        : DEFAULT_WORLD_NAME;
+  const stages = data.stages.map((s) => sliceFromLooseLevelJson(s));
+  return {
+    world: {
+      name: worldName,
+      activeStageIndex: 0,
+      stages,
+    },
+  };
+};

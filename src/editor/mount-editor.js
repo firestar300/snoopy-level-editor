@@ -7,25 +7,65 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH,
   isBlockBrushChar,
+  isBlockPushableToolbarShortcutChar,
   isBreakableTileChar,
   isEmbeddablePushableBlockChar,
   MUSIC_TRACKS,
   normalizeMusicPair,
   stageBgmThemeLabel,
   TELEPORT_TILE_A,
-  TELEPORT_TILE_B,
+  TELEPORT_TILE_MAX_PER_STAGE,
   TILE_BY_CHAR,
   TILE_TOOLBAR_GROUPS,
   urlForStageBgmPreview,
 } from '../level/constants.js';
 import { createInitialState } from '../level/default-state.js';
-import { serializeLevel } from '../level/serialize.js';
+import {
+  applyLevelSliceToState,
+  createEmptyLevelSlice,
+  deepCloneLevelSlice,
+  extractLevelSliceFromState,
+  levelSlicesEqual,
+} from '../level/level-slice.js';
+import { validateLevelSlice } from '../level/stage-validation.js';
+import {
+  allWorldStagesValid,
+  appendEmptyWorldStage,
+  DEFAULT_WORLD_NAME,
+  firstInvalidWorldStage,
+  loadWorldStageIndex,
+  persistActiveWorldStage,
+  parseWorldDocumentFromImportData,
+  removeWorldStageAt,
+  serializeProjectForExport,
+} from '../level/world-project.js';
 import { getEntitySpriteStyle, getSnoopyStartMarkerStyle } from './entity-sprites.js';
 import { getGbSpriteUrl } from './gb-sprite-urls.js';
 import './editor.css';
 
 /** Cell characters allowed in Select mode for the sidebar (all level tiles from schema). */
 const isSelectableInspectorTile = (c) => TILE_BY_CHAR[c] != null;
+
+/** Pixel size of one grid cell in world-strip stage previews. */
+const STAGE_PREVIEW_CELL_PX = 8;
+/** Approximate Game Boy–style tile colors for mini previews (char → hex). */
+const STAGE_PREVIEW_TILE_HEX = {
+  '0': '#8bac0f',
+  '1': '#306230',
+  '2': '#3d8048',
+  '3': '#c4a35a',
+  '4': '#5c4eb8',
+  '5': '#7d6ee0',
+  '6': '#3d7ab8',
+  '7': '#b86a3d',
+  '8': '#3db88a',
+  '9': '#b83d8a',
+  A: '#4a7038',
+  B: '#4a4a68',
+  C: '#684a38',
+  D: '#386868',
+  E: '#7a9444',
+};
 
 const BLOCKS_SPRITE_PATH = '/sprites/blocks.png';
 const BLOCKS_SHEET_W = 144;
@@ -59,10 +99,78 @@ const tileStyleFromSheet = (sx, sy, outPx) => {
 const GRID_TILE_PX = 32;
 /** Hidden bonus (power-up or portal in block): 50% of grid cell, top-right on pushable / breakable. */
 const HIDDEN_BONUS_BADGE_PX = Math.round(GRID_TILE_PX * 0.5);
-/** Directed pushable (A–D): arrow tile sprite at 50% of cell, bottom-right. */
-const PUSHABLE_SINGLE_DIR_ARROW_PX = HIDDEN_BONUS_BADGE_PX;
-/** Omnidirectional pushable (`2`): four arrow tiles in a 2×2 grid (25% each). */
-const PUSHABLE_OMNI_ARROW_PX = Math.round(GRID_TILE_PX * 0.25);
+/** Sizes for pushable direction badges (same proportions as grid: omni 25%, single-dir 50% of cell). */
+const pushableDirBadgeSizesFromCellPx = (cellPx) => ({
+  omniArrow: Math.round(cellPx * 0.25),
+  singleArrow: Math.round(cellPx * 0.5),
+});
+
+/**
+ * Arrow overlay for embeddable pushable tiles (`2`, `A`–`D`).
+ * @param {HTMLElement} container - positioning context (`position: relative` recommended)
+ * @param {string} char
+ * @param {number} cellPx
+ * @param {{ accessible?: boolean }} [options] - grid cells use accessible labels; toolbar/preview use decorative only
+ */
+const appendPushableDirectionBadge = (container, char, cellPx, options = {}) => {
+  const { accessible = false } = options;
+  if (!isEmbeddablePushableBlockChar(char)) return;
+
+  const { omniArrow: om, singleArrow: px } = pushableDirBadgeSizesFromCellPx(cellPx);
+
+  if (char === '2') {
+    const wrap = document.createElement('div');
+    wrap.className = 'editor__pushable-dir-badge editor__pushable-dir-badge--omni';
+    if (accessible) {
+      wrap.setAttribute('role', 'img');
+      wrap.setAttribute(
+        'aria-label',
+        'Pushable block — can be pushed in all four directions'
+      );
+    } else {
+      wrap.setAttribute('role', 'presentation');
+      wrap.setAttribute('aria-hidden', 'true');
+    }
+    wrap.style.display = 'grid';
+    wrap.style.gridTemplateColumns = `${om}px ${om}px`;
+    wrap.style.gridTemplateRows = `${om}px ${om}px`;
+    wrap.style.width = `${om * 2}px`;
+    wrap.style.height = `${om * 2}px`;
+    const omniOrder = ['6', '7', '9', '8'];
+    for (const ac of omniOrder) {
+      const tileMeta = TILE_BY_CHAR[ac];
+      const icon = document.createElement('div');
+      icon.className = 'editor__pushable-dir-badge-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.style.cssText = `${tileStyleFromSheet(tileMeta.sheet.sx, tileMeta.sheet.sy, om)};width:${om}px;height:${om}px`;
+      wrap.appendChild(icon);
+    }
+    container.appendChild(wrap);
+    return;
+  }
+
+  const arrowChar = char === 'A' ? '6' : char === 'B' ? '8' : char === 'C' ? '9' : char === 'D' ? '7' : null;
+  if (!arrowChar) return;
+  const tileMeta = TILE_BY_CHAR[arrowChar];
+  const wrap = document.createElement('div');
+  wrap.className = 'editor__pushable-dir-badge';
+  if (accessible) {
+    wrap.setAttribute('role', 'img');
+    const dirLabel =
+      char === 'A' ? 'upward' : char === 'B' ? 'downward' : char === 'C' ? 'to the left' : 'to the right';
+    wrap.setAttribute('aria-label', `Pushable — only ${dirLabel}`);
+  } else {
+    wrap.setAttribute('role', 'presentation');
+    wrap.setAttribute('aria-hidden', 'true');
+  }
+  const icon = document.createElement('div');
+  icon.className = 'editor__pushable-dir-badge-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.style.cssText = `${tileStyleFromSheet(tileMeta.sheet.sx, tileMeta.sheet.sy, px)};width:${px}px;height:${px}px`;
+  wrap.appendChild(icon);
+  container.appendChild(wrap);
+};
+
 /** Ghost sprite on portal/power-up destination cells (100% of grid cell). */
 const DESTINATION_PREVIEW_PX = GRID_TILE_PX;
 
@@ -99,6 +207,10 @@ const fillTileThumb = (thumb, t, outPx = TOOLBAR_TILE_THUMB_PX) => {
   thumb.classList.add('editor__palette-btn-thumb--sprite');
   if (t.sheet === 'toggle-passable') thumb.style.cssText = tileStyleFromSheet(0, 16, outPx);
   else thumb.style.cssText = tileStyleFromSheet(t.sheet.sx, t.sheet.sy, outPx);
+  if (t.char && isEmbeddablePushableBlockChar(t.char)) {
+    thumb.style.position = 'relative';
+    appendPushableDirectionBadge(thumb, t.char, outPx, { accessible: false });
+  }
 };
 
 const fillEntityThumb = (thumb, ent, outPx = TOOLBAR_TILE_THUMB_PX) => {
@@ -213,45 +325,8 @@ const appendTileMovePreviewLayer = (cell, state, fromX, fromY, isInvalid) => {
   }
   wrap.appendChild(tile);
 
-  if (isEmbeddablePushableBlockChar(char)) {
-    if (char === '2') {
-      const dirWrap = document.createElement('div');
-      dirWrap.className = 'editor__pushable-dir-badge editor__pushable-dir-badge--omni';
-      dirWrap.setAttribute('role', 'presentation');
-      dirWrap.setAttribute('aria-hidden', 'true');
-      const om = PUSHABLE_OMNI_ARROW_PX;
-      dirWrap.style.display = 'grid';
-      dirWrap.style.gridTemplateColumns = `${om}px ${om}px`;
-      dirWrap.style.gridTemplateRows = `${om}px ${om}px`;
-      dirWrap.style.width = `${om * 2}px`;
-      dirWrap.style.height = `${om * 2}px`;
-      const omniOrder = ['6', '7', '9', '8'];
-      for (const ac of omniOrder) {
-        const t = TILE_BY_CHAR[ac];
-        const icon = document.createElement('div');
-        icon.className = 'editor__pushable-dir-badge-icon';
-        icon.setAttribute('aria-hidden', 'true');
-        icon.style.cssText = `${tileStyleFromSheet(t.sheet.sx, t.sheet.sy, om)};width:${om}px;height:${om}px`;
-        dirWrap.appendChild(icon);
-      }
-      wrap.appendChild(dirWrap);
-    } else {
-      const arrowChar = char === 'A' ? '6' : char === 'B' ? '8' : char === 'C' ? '9' : char === 'D' ? '7' : null;
-      if (arrowChar) {
-        const t = TILE_BY_CHAR[arrowChar];
-        const dirWrap = document.createElement('div');
-        dirWrap.className = 'editor__pushable-dir-badge';
-        dirWrap.setAttribute('role', 'presentation');
-        dirWrap.setAttribute('aria-hidden', 'true');
-        const px = PUSHABLE_SINGLE_DIR_ARROW_PX;
-        const icon = document.createElement('div');
-        icon.className = 'editor__pushable-dir-badge-icon';
-        icon.style.cssText = `${tileStyleFromSheet(t.sheet.sx, t.sheet.sy, px)};width:${px}px;height:${px}px`;
-        dirWrap.appendChild(icon);
-        wrap.appendChild(dirWrap);
-      }
-    }
-  }
+  if (isEmbeddablePushableBlockChar(char))
+    appendPushableDirectionBadge(wrap, char, GRID_TILE_PX, { accessible: false });
 
   const entitiesAtFrom = state.entities.filter((ent) => ent.x === fromX && ent.y === fromY);
   const hiddenPu = entitiesAtFrom.find((e) => e.type === 'powerup' && e.hidden);
@@ -439,14 +514,13 @@ const canPlaceAnotherToolbarEntity = (state, type) => {
   return countToolbarEntitiesOfType(state, type) < max;
 };
 
-/** At most one teleporter A and one teleporter B tile per level. */
+/** Teleporter uses two `4` tiles max; legacy `5` is not placeable from the toolbar. */
 const canPaintTileCharAt = (state, x, y, ch) => {
   const cur = getTileChar(state, x, y);
+  if (ch === '5') return false;
   if (ch === TELEPORT_TILE_A && cur !== TELEPORT_TILE_A) {
-    if (countTileCharOccurrences(state.tiles, TELEPORT_TILE_A) >= 1) return false;
-  }
-  if (ch === TELEPORT_TILE_B && cur !== TELEPORT_TILE_B) {
-    if (countTileCharOccurrences(state.tiles, TELEPORT_TILE_B) >= 1) return false;
+    if (countTileCharOccurrences(state.tiles, TELEPORT_TILE_A) >= TELEPORT_TILE_MAX_PER_STAGE)
+      return false;
   }
   return true;
 };
@@ -686,6 +760,15 @@ const syncHiddenPowerupTargetsFromDestination = (e) => {
   };
 };
 
+const normalizeImportedEntitiesInPlace = (entities) => {
+  if (!Array.isArray(entities)) return;
+  entities.forEach((ent) => {
+    if (ent.type !== 'powerup' || !ent.hidden) return;
+    const { mixedTargets } = syncHiddenPowerupDestinationFromTargets(ent);
+    if (!mixedTargets) syncHiddenPowerupTargetsFromDestination(ent);
+  });
+};
+
 const createDefaultHiddenPowerupTargets = () => ({
   up: { x: 4, y: 4 },
   down: { x: 4, y: 4 },
@@ -866,11 +949,7 @@ const parseLevelImport = (raw) => {
     tiles.push(row.padEnd(GRID_WIDTH, '0').slice(0, GRID_WIDTH));
   }
   const entities = Array.isArray(data.entities) ? data.entities.map((e) => ({ ...e })) : [];
-  entities.forEach((ent) => {
-    if (ent.type !== 'powerup' || !ent.hidden) return;
-    const { mixedTargets } = syncHiddenPowerupDestinationFromTargets(ent);
-    if (!mixedTargets) syncHiddenPowerupTargetsFromDestination(ent);
-  });
+  normalizeImportedEntitiesInPlace(entities);
   const audio = normalizeMusicPair(data.music ?? createInitialState().music);
   return {
     name: data.name ?? 'Imported',
@@ -903,15 +982,9 @@ const downloadJson = (filename, text) => {
   URL.revokeObjectURL(url);
 };
 
-/** Replace level + editor UI fields with a fresh `createInitialState()` snapshot (mutates `state`). */
-const resetEditorStateToInitial = (state) => {
+/** Reset non-level editor UI to match `createInitialState()` (tool, brush, selection). */
+const resetEditorChromeToInitial = (state) => {
   const next = createInitialState();
-  state.name = next.name;
-  state.music = next.music;
-  state.clearMusic = next.clearMusic;
-  state.startPosition = { ...next.startPosition };
-  state.tiles = next.tiles.map((row) => row);
-  state.entities = [];
   state.tool = { ...next.tool };
   state.selectedTileCell = next.selectedTileCell;
   state.tileMoveDrag = next.tileMoveDrag;
@@ -932,16 +1005,22 @@ const resetEditorStateToInitial = (state) => {
   state.inspectPlayerStart = next.inspectPlayerStart;
 };
 
-/** True when the editor matches a fresh `createInitialState()` (nothing to clear). */
-const isEditorStatePristine = (state) => {
+/** Clear the active stage only; keep other stages and world project name. */
+const resetActiveStageToEmpty = (state) => {
+  const levelNum = (state.world?.activeStageIndex ?? 0) + 1;
+  applyLevelSliceToState(state, createEmptyLevelSlice(levelNum));
+  resetEditorChromeToInitial(state);
+  persistActiveWorldStage(state);
+};
+
+/** True when the active stage is already empty and editor chrome is default (Clear stage disabled). */
+const isClearStageButtonDisabled = (state) => {
+  persistActiveWorldStage(state);
   const ref = createInitialState();
-  if (state.name !== ref.name) return false;
-  if (normalizeMusicPair(state.music).music !== normalizeMusicPair(ref.music).music) return false;
-  if (state.clearMusic !== ref.clearMusic) return false;
-  if (state.startPosition.x !== ref.startPosition.x || state.startPosition.y !== ref.startPosition.y) return false;
-  if (state.tiles.length !== ref.tiles.length) return false;
-  for (let i = 0; i < state.tiles.length; i++) if (state.tiles[i] !== ref.tiles[i]) return false;
-  if (state.entities.length !== 0) return false;
+  const levelNum = (state.world?.activeStageIndex ?? 0) + 1;
+  const empty = createEmptyLevelSlice(levelNum);
+  const active = state.world?.stages?.[state.world.activeStageIndex];
+  if (!active || !levelSlicesEqual(active, empty)) return false;
   if (state.tool.mode !== 'tile' || state.tool.char !== ref.tool.char || state.tool.tileEdit !== ref.tool.tileEdit)
     return false;
   if (state.selectedTileCell != null) return false;
@@ -984,77 +1063,139 @@ export const mountEditor = (root) => {
       </div>
       <div class="editor__body">
         <aside class="editor__sidebar" aria-label="Tools">
-          <h2>Mode</h2>
-          <div class="editor__tool-modes editor__tool-modes--tile" role="group" aria-label="Tile interaction">
-            <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-add" aria-label="Add tiles">
-              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">add</span>
-              <span class="editor__mode-label">Add</span>
-            </button>
-            <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-select" aria-label="Select tile on grid">
-              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">ads_click</span>
-              <span class="editor__mode-label">Select</span>
-            </button>
-            <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-erase" aria-label="Erase tile">
-              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">ink_eraser</span>
-              <span class="editor__mode-label">Erase</span>
-            </button>
-          </div>
-          <div class="editor__sidebar-stage-actions">
-            <button
-              type="button"
-              class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--clear-stage"
-              data-action="clear-stage-open"
-              aria-haspopup="dialog"
-              aria-controls="editor-dialog-clear-stage"
+          <section class="editor__sidebar-section" aria-labelledby="sidebar-section-file">
+            <h2 id="sidebar-section-file" class="editor__sidebar-section-title">File</h2>
+            <label
+              for="fld-import-map"
+              class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--sidebar-import"
             >
-              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">delete_sweep</span>
-              <span class="editor__mode-label">Clear stage</span>
-            </button>
-          </div>
-          <details class="editor__accordion editor__accordion--settings">
-            <summary
-              class="editor__btn editor__btn--mode-tile editor__btn--sidebar-settings"
-              aria-label="Level settings — show or hide"
-            >
-              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">settings</span>
-              <span class="editor__mode-label">Settings</span>
-              <span class="material-symbols-outlined editor__accordion-chevron editor__mode-glyph" aria-hidden="true">expand_more</span>
-            </summary>
-            <div
-              id="sidebar-settings-fields"
-              class="editor__sidebar-settings-fields"
-              data-sidebar-settings
-            >
-              <div class="editor__field">
-                <label for="fld-name">Name</label>
-                <input id="fld-name" type="text" autocomplete="off" />
-              </div>
-              <div class="editor__field">
-                <label for="fld-music">Music</label>
-                <select id="fld-music" aria-describedby="fld-music-hint"></select>
-                <div class="editor__music-preview">
-                  <audio
-                    id="fld-music-preview"
-                    class="editor__music-preview__audio"
-                    controls
-                    preload="metadata"
-                    aria-label="Preview stage theme"
-                  ></audio>
+              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">upload</span>
+              <span class="editor__mode-label">Import Map</span>
+              <input
+                id="fld-import-map"
+                type="file"
+                accept="application/json,.json"
+                class="visually-hidden"
+                data-action="import"
+              />
+            </label>
+          </section>
+          <section class="editor__sidebar-section" aria-labelledby="sidebar-section-modes">
+            <h2 id="sidebar-section-modes" class="editor__sidebar-section-title">Modes</h2>
+            <div class="editor__tool-modes editor__tool-modes--tile" role="group" aria-label="Tile interaction">
+              <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-add" aria-label="Add tiles">
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">add</span>
+                <span class="editor__mode-label">Add</span>
+              </button>
+              <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-select" aria-label="Select tile on grid">
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">ads_click</span>
+                <span class="editor__mode-label">Select</span>
+              </button>
+              <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-erase" aria-label="Erase tile">
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">ink_eraser</span>
+                <span class="editor__mode-label">Erase</span>
+              </button>
+            </div>
+          </section>
+          <section class="editor__sidebar-section" aria-labelledby="sidebar-section-stage">
+            <h2 id="sidebar-section-stage" class="editor__sidebar-section-title">Stage</h2>
+            <details class="editor__accordion editor__accordion--settings">
+              <summary
+                class="editor__btn editor__btn--mode-tile editor__btn--sidebar-settings"
+                aria-label="Stage settings — show or hide"
+              >
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">settings</span>
+                <span class="editor__mode-label">Settings</span>
+                <span class="material-symbols-outlined editor__accordion-chevron editor__mode-glyph" aria-hidden="true">expand_more</span>
+              </summary>
+              <div
+                id="sidebar-settings-fields"
+                class="editor__sidebar-settings-fields"
+                data-sidebar-settings
+              >
+                <div class="editor__field">
+                  <label for="fld-name">Name</label>
+                  <input id="fld-name" type="text" autocomplete="off" />
                 </div>
-                <p id="fld-music-hint" class="editor__hint editor__hint--music-pair">
-                  Each theme sets the stage BGM; the clear jingle is paired automatically (same mapping as
-                  game levels).
-                </p>
+                <div class="editor__field">
+                  <label for="fld-music">Music</label>
+                  <select id="fld-music" aria-describedby="fld-music-hint"></select>
+                  <div class="editor__music-preview">
+                    <audio
+                      id="fld-music-preview"
+                      class="editor__music-preview__audio"
+                      controls
+                      preload="metadata"
+                      aria-label="Preview stage theme"
+                    ></audio>
+                  </div>
+                  <p id="fld-music-hint" class="editor__hint editor__hint--music-pair">
+                    Each theme sets the stage BGM; the clear jingle is paired automatically (same mapping as
+                    game levels).
+                  </p>
+                </div>
+              </div>
+            </details>
+            <div class="editor__sidebar-stage-actions">
+              <button
+                type="button"
+                class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--clear-stage"
+                data-action="clear-stage-open"
+                aria-haspopup="dialog"
+                aria-controls="editor-dialog-clear-stage"
+              >
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">delete_sweep</span>
+                <span class="editor__mode-label">Clear stage</span>
+              </button>
+            </div>
+          </section>
+        </aside>
+        <div class="editor__main-column">
+          <div class="editor__main" id="editor-main" role="main">
+            <div class="editor__grid-wrap" data-grid-wrap>
+              <div class="editor__grid" role="grid" aria-label="Level grid" aria-rowcount="${GRID_HEIGHT}" aria-colcount="${GRID_WIDTH}"></div>
+            </div>
+          </div>
+          <section class="editor__world" aria-label="World and stages" data-world-strip>
+            <div class="editor__world-bar">
+              <div class="editor__world-bar-left">
+                <h2 class="editor__world-heading">World</h2>
+                <div class="editor__world-bar-fields">
+                  <label class="editor__world-name-label" for="fld-world-name">Project name</label>
+                  <input
+                    id="fld-world-name"
+                    class="editor__world-name-input"
+                    type="text"
+                    autocomplete="off"
+                    placeholder="Untitled world"
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                class="editor__btn editor__btn--primary editor__btn--world-download"
+                data-action="world-download"
+                disabled
+              >
+                <span class="material-symbols-outlined editor__btn--world-download-icon" aria-hidden="true">download</span>
+                Download World
+              </button>
+            </div>
+            <div class="editor__world-stages-inner">
+              <div class="editor__world-stages-scroll-cards">
+                <div class="editor__world-stages" data-world-stages-row></div>
+              </div>
+              <div class="editor__world-add-column">
+                <button type="button" class="editor__btn editor__btn--world-add" data-action="world-add-stage">
+                  <span class="material-symbols-outlined editor__world-add-icon" aria-hidden="true">add_box</span>
+                  Add stage
+                </button>
               </div>
             </div>
-          </details>
-        </aside>
-        <div class="editor__main" id="editor-main" role="main">
-          <div class="editor__grid-wrap" data-grid-wrap>
-            <div class="editor__grid" role="grid" aria-label="Level grid" aria-rowcount="${GRID_HEIGHT}" aria-colcount="${GRID_WIDTH}"></div>
-          </div>
+            <p class="editor__hint editor__hint--world-add" data-world-add-hint hidden></p>
+          </section>
         </div>
-        <aside class="editor__panel" aria-label="Selection, audio, and export">
+        <aside class="editor__panel" aria-label="Selection and JSON preview">
           <div class="editor__block-brush" data-block-brush hidden>
             <div class="editor__block-selection">
               <h2 class="editor__section-title">Selected tile</h2>
@@ -1219,11 +1360,6 @@ export const mountEditor = (root) => {
           </div>
           <div class="editor__actions">
             <button type="button" class="editor__btn editor__btn--primary" data-action="copy">Copy JSON</button>
-            <button type="button" class="editor__btn" data-action="download">Download</button>
-            <label class="editor__btn" style="cursor:pointer;margin:0">
-              Import JSON
-              <input type="file" accept="application/json,.json" class="visually-hidden" data-action="import" />
-            </label>
           </div>
         </aside>
       </div>
@@ -1258,6 +1394,11 @@ export const mountEditor = (root) => {
     fldMusic: root.querySelector('#fld-music'),
     musicPreview: root.querySelector('#fld-music-preview'),
     fldJson: root.querySelector('#fld-json'),
+    fldWorldName: root.querySelector('#fld-world-name'),
+    btnWorldDownload: root.querySelector('[data-action="world-download"]'),
+    worldStagesRow: root.querySelector('[data-world-stages-row]'),
+    btnWorldAddStage: root.querySelector('[data-action="world-add-stage"]'),
+    worldAddHint: root.querySelector('[data-world-add-hint]'),
     blockBrush: root.querySelector('[data-block-brush]'),
     blockSelectionThumb: root.querySelector('[data-block-selection-thumb]'),
     blockSelectionName: root.querySelector('[data-block-selection-name]'),
@@ -1296,7 +1437,7 @@ export const mountEditor = (root) => {
     els.dialogClearStage?.close();
   });
   els.btnClearStageConfirm?.addEventListener('click', () => {
-    resetEditorStateToInitial(state);
+    resetActiveStageToEmpty(state);
     clearTileMoveDrag();
     els.musicPreview?.pause();
     els.dialogClearStage?.close();
@@ -1304,6 +1445,49 @@ export const mountEditor = (root) => {
   });
   els.dialogClearStage?.addEventListener('close', () => {
     queueMicrotask(() => els.btnClearStageOpen?.focus());
+  });
+
+  els.fldWorldName?.addEventListener('input', () => {
+    state.world.name = els.fldWorldName.value;
+    render();
+  });
+  els.btnWorldDownload?.addEventListener('click', () => {
+    if (!allWorldStagesValid(state)) return;
+    const safe =
+      String(state.world?.name || DEFAULT_WORLD_NAME)
+        .replace(/[^\w\-]+/g, '-')
+        .slice(0, 40) || 'world';
+    downloadJson(`${safe}.json`, serializeProjectForExport(state));
+  });
+  els.btnWorldAddStage?.addEventListener('click', () => {
+    if (!allWorldStagesValid(state)) return;
+    appendEmptyWorldStage(state);
+    resetEditorChromeToInitial(state);
+    clearTileMoveDrag();
+    els.musicPreview?.pause();
+    render();
+  });
+  els.worldStagesRow?.addEventListener('click', (ev) => {
+    const delBtn = ev.target.closest('[data-action="world-remove-stage"]');
+    if (delBtn) {
+      const idx = parseInt(delBtn.dataset.stageIndex, 10);
+      if (!Number.isNaN(idx)) {
+        removeWorldStageAt(state, idx);
+        clearTileMoveDrag();
+        els.musicPreview?.pause();
+        render();
+      }
+      return;
+    }
+    const card = ev.target.closest('.editor__world-stage-card');
+    if (!card) return;
+    const idx = parseInt(card.dataset.stageIndex, 10);
+    if (Number.isNaN(idx)) return;
+    if (idx === state.world.activeStageIndex) return;
+    loadWorldStageIndex(state, idx);
+    clearTileMoveDrag();
+    els.musicPreview?.pause();
+    render();
   });
 
   MUSIC_TRACKS.forEach((track) => {
@@ -1637,6 +1821,7 @@ export const mountEditor = (root) => {
 
   const syncMetaFields = () => {
     els.fldName.value = state.name;
+    if (els.fldWorldName) els.fldWorldName.value = state.world?.name ?? DEFAULT_WORLD_NAME;
     const pair = normalizeMusicPair(state.music);
     state.music = pair.music;
     state.clearMusic = pair.clearMusic;
@@ -1672,11 +1857,16 @@ export const mountEditor = (root) => {
       let disabled = false;
       const ch = btn.dataset.char;
       if (btn.dataset.blockBrush != null)
-        on = state.tool.mode === 'tile' && te === 'add' && isBlockBrushChar(state.tool.char);
+        on =
+          state.tool.mode === 'tile' &&
+          te === 'add' &&
+          isBlockBrushChar(state.tool.char) &&
+          !isBlockPushableToolbarShortcutChar(state.tool.char);
       else {
         on = state.tool.mode === 'tile' && te === 'add' && state.tool.char === ch;
-        if (ch === TELEPORT_TILE_A) disabled = countTileCharOccurrences(state.tiles, TELEPORT_TILE_A) >= 1;
-        if (ch === TELEPORT_TILE_B) disabled = countTileCharOccurrences(state.tiles, TELEPORT_TILE_B) >= 1;
+        if (ch === TELEPORT_TILE_A)
+          disabled =
+            countTileCharOccurrences(state.tiles, TELEPORT_TILE_A) >= TELEPORT_TILE_MAX_PER_STAGE;
       }
       btn.disabled = disabled;
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -2140,50 +2330,8 @@ export const mountEditor = (root) => {
       if (layer.childNodes.length > 0) cell.appendChild(layer);
     }
 
-    if (isEmbeddablePushableBlockChar(char)) {
-      if (char === '2') {
-        const wrap = document.createElement('div');
-        wrap.className = 'editor__pushable-dir-badge editor__pushable-dir-badge--omni';
-        wrap.setAttribute('role', 'img');
-        wrap.setAttribute(
-          'aria-label',
-          'Pushable block — can be pushed in all four directions'
-        );
-        const om = PUSHABLE_OMNI_ARROW_PX;
-        wrap.style.display = 'grid';
-        wrap.style.gridTemplateColumns = `${om}px ${om}px`;
-        wrap.style.gridTemplateRows = `${om}px ${om}px`;
-        wrap.style.width = `${om * 2}px`;
-        wrap.style.height = `${om * 2}px`;
-        const omniOrder = ['6', '7', '9', '8'];
-        for (const ac of omniOrder) {
-          const t = TILE_BY_CHAR[ac];
-          const icon = document.createElement('div');
-          icon.className = 'editor__pushable-dir-badge-icon';
-          icon.setAttribute('aria-hidden', 'true');
-          icon.style.cssText = `${tileStyleFromSheet(t.sheet.sx, t.sheet.sy, om)};width:${om}px;height:${om}px`;
-          wrap.appendChild(icon);
-        }
-        cell.appendChild(wrap);
-      } else {
-        const arrowChar = char === 'A' ? '6' : char === 'B' ? '8' : char === 'C' ? '9' : char === 'D' ? '7' : null;
-        if (arrowChar) {
-          const t = TILE_BY_CHAR[arrowChar];
-          const wrap = document.createElement('div');
-          wrap.className = 'editor__pushable-dir-badge';
-          wrap.setAttribute('role', 'img');
-          const dirLabel =
-            char === 'A' ? 'upward' : char === 'B' ? 'downward' : char === 'C' ? 'to the left' : 'to the right';
-          wrap.setAttribute('aria-label', `Pushable — only ${dirLabel}`);
-          const icon = document.createElement('div');
-          icon.className = 'editor__pushable-dir-badge-icon';
-          const px = PUSHABLE_SINGLE_DIR_ARROW_PX;
-          icon.style.cssText = `${tileStyleFromSheet(t.sheet.sx, t.sheet.sy, px)};width:${px}px;height:${px}px`;
-          wrap.appendChild(icon);
-          cell.appendChild(wrap);
-        }
-      }
-    }
+    if (isEmbeddablePushableBlockChar(char))
+      appendPushableDirectionBadge(cell, char, GRID_TILE_PX, { accessible: true });
 
     let entitiesHere = state.entities.filter((ent) => ent.x === x && ent.y === y);
     if (d && awayFromSource && d.fromX === x && d.fromY === y) {
@@ -2366,7 +2514,120 @@ export const mountEditor = (root) => {
     }
   };
 
+  const drawStagePreviewOnCanvas = (canvas, slice) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const cell = STAGE_PREVIEW_CELL_PX;
+    const w = GRID_WIDTH * cell;
+    const h = GRID_HEIGHT * cell;
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    for (let y = 0; y < GRID_HEIGHT; y++) {
+      const row = String(slice.tiles[y] || '').padEnd(GRID_WIDTH, '0');
+      for (let x = 0; x < GRID_WIDTH; x++) {
+        const ch = row[x] || '0';
+        ctx.fillStyle = STAGE_PREVIEW_TILE_HEX[ch] ?? STAGE_PREVIEW_TILE_HEX['0'];
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+      }
+    }
+    const sx = Math.floor(slice.startPosition?.x ?? 0);
+    const sy = Math.floor(slice.startPosition?.y ?? 0);
+    if (sx >= 0 && sx < GRID_WIDTH && sy >= 0 && sy < GRID_HEIGHT) {
+      ctx.fillStyle = 'rgba(28, 48, 120, 0.92)';
+      ctx.fillRect(sx * cell, sy * cell, cell, cell);
+      ctx.strokeStyle = '#e8ecf4';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx * cell + 0.5, sy * cell + 0.5, Math.max(0, cell - 1), Math.max(0, cell - 1));
+    }
+  };
+
+  const renderWorldStrip = () => {
+    if (!els.worldStagesRow || !els.fldWorldName || !els.btnWorldAddStage) return;
+    els.fldWorldName.value = state.world?.name ?? DEFAULT_WORLD_NAME;
+    els.worldStagesRow.textContent = '';
+    const w = state.world;
+    if (!w?.stages?.length) return;
+    w.stages.forEach((slice, index) => {
+      const card = document.createElement('div');
+      card.className = 'editor__world-stage-card';
+      if (index === w.activeStageIndex) card.classList.add('editor__world-stage-card--active');
+      card.dataset.stageIndex = String(index);
+
+      const prev = document.createElement('canvas');
+      prev.className = 'editor__world-stage-preview';
+      prev.setAttribute('aria-hidden', 'true');
+      drawStagePreviewOnCanvas(prev, slice);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'editor__world-stage-preview-wrap';
+      wrap.appendChild(prev);
+
+      const { valid, errors } = validateLevelSlice(slice);
+      if (!valid) {
+        const bad = document.createElement('span');
+        bad.className = 'editor__world-stage-invalid';
+        bad.title = errors.slice(0, 6).join('; ');
+        bad.setAttribute('role', 'img');
+        bad.setAttribute('aria-label', `Invalid: ${errors[0] ?? 'check stage'}`);
+        bad.textContent = '!';
+        wrap.appendChild(bad);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'editor__world-stage-meta';
+      const title = document.createElement('span');
+      title.className = 'editor__world-stage-title';
+      const rawName = String(slice.name || '').trim();
+      title.textContent = rawName || `Stage ${index + 1}`;
+      meta.appendChild(title);
+
+      const actions = document.createElement('div');
+      actions.className = 'editor__world-stage-actions';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'editor__btn editor__btn--world-stage-del';
+      del.dataset.action = 'world-remove-stage';
+      del.dataset.stageIndex = String(index);
+      del.setAttribute('aria-label', `Remove stage ${index + 1}`);
+      del.disabled = w.stages.length <= 1;
+      const delIcon = document.createElement('span');
+      delIcon.className = 'material-symbols-outlined editor__world-stage-del-icon';
+      delIcon.setAttribute('aria-hidden', 'true');
+      delIcon.textContent = 'delete';
+      del.appendChild(delIcon);
+      actions.appendChild(del);
+
+      const footer = document.createElement('div');
+      footer.className = 'editor__world-stage-footer';
+      footer.appendChild(meta);
+      footer.appendChild(actions);
+
+      card.appendChild(wrap);
+      card.appendChild(footer);
+      els.worldStagesRow.appendChild(card);
+    });
+
+    const canAdd = allWorldStagesValid(state);
+    els.btnWorldAddStage.disabled = !canAdd;
+    const hint = els.worldAddHint;
+    if (hint) {
+      if (!canAdd) {
+        hint.hidden = false;
+        const inv = firstInvalidWorldStage(state);
+        hint.textContent = inv?.errors?.length
+          ? `Fix all stages before adding another. Stage ${inv.index + 1}: ${inv.errors[0]}`
+          : 'Fix all stages before adding another.';
+      } else {
+        hint.hidden = true;
+        hint.textContent = '';
+      }
+    }
+  };
+
   const render = () => {
+    persistActiveWorldStage(state);
     if (state.selectedEntityIndex != null && state.selectedEntityIndex >= state.entities.length)
       state.selectedEntityIndex = null;
     if (state.selectedTileCell) {
@@ -2413,12 +2674,20 @@ export const mountEditor = (root) => {
     updateEntityToolbar();
     renderGrid();
     renderDestinationArrows();
-    els.fldJson.value = serializeLevel(state);
+    renderWorldStrip();
+    els.fldJson.value = serializeProjectForExport(state);
     renderInspector();
     if (els.btnClearStageOpen) {
-      const pristine = isEditorStatePristine(state);
+      const pristine = isClearStageButtonDisabled(state);
       els.btnClearStageOpen.disabled = pristine;
       els.btnClearStageOpen.title = pristine ? 'Nothing to clear — the stage is already empty.' : '';
+    }
+    if (els.btnWorldDownload) {
+      const worldOk = allWorldStagesValid(state);
+      els.btnWorldDownload.disabled = !worldOk;
+      els.btnWorldDownload.title = worldOk
+        ? 'Download this world as JSON (all stages)'
+        : 'Fix all stages before downloading — see hints on stage cards or below.';
     }
   };
 
@@ -2464,7 +2733,11 @@ export const mountEditor = (root) => {
     const te = getTileEdit(state);
     if (btn.dataset.blockBrush != null)
       state.tool = { mode: 'tile', char: state.blockVariant, tileEdit: te === 'select' ? 'add' : te };
-    else if (btn.dataset.char) state.tool = { mode: 'tile', char: btn.dataset.char, tileEdit: te === 'select' ? 'add' : te };
+    else if (btn.dataset.char) {
+      const nextChar = btn.dataset.char;
+      if (isBlockBrushChar(nextChar)) state.blockVariant = nextChar;
+      state.tool = { mode: 'tile', char: nextChar, tileEdit: te === 'select' ? 'add' : te };
+    }
     else return;
     state.selectedEntityIndex = null;
     if (te === 'select') {
@@ -2792,11 +3065,7 @@ export const mountEditor = (root) => {
   });
 
   root.querySelector('[data-action="copy"]').addEventListener('click', () => {
-    copyText(serializeLevel(state));
-  });
-  root.querySelector('[data-action="download"]').addEventListener('click', () => {
-    const safe = String(state.name).replace(/[^\w\-]+/g, '-').slice(0, 40) || 'level';
-    downloadJson(`${safe}.json`, serializeLevel(state));
+    copyText(serializeProjectForExport(state));
   });
   root.querySelector('[data-action="import"]').addEventListener('change', async (ev) => {
     const file = ev.target.files?.[0];
@@ -2804,14 +3073,34 @@ export const mountEditor = (root) => {
     if (!file) return;
     const text = await file.text();
     try {
-      const parsed = parseLevelImport(text);
-      Object.assign(state, parsed);
-      delete state.id;
+      const data = JSON.parse(text);
+      const worldDoc = parseWorldDocumentFromImportData(data);
+      if (worldDoc) {
+        state.world = {
+          name: worldDoc.world.name,
+          activeStageIndex: worldDoc.world.activeStageIndex,
+          stages: worldDoc.world.stages.map((s) => deepCloneLevelSlice(s)),
+        };
+        for (const s of state.world.stages) normalizeImportedEntitiesInPlace(s.entities);
+        applyLevelSliceToState(
+          state,
+          deepCloneLevelSlice(state.world.stages[state.world.activeStageIndex])
+        );
+      } else {
+        const parsed = parseLevelImport(text);
+        Object.assign(state, parsed);
+        delete state.id;
+        state.world = {
+          name: DEFAULT_WORLD_NAME,
+          activeStageIndex: 0,
+          stages: [deepCloneLevelSlice(extractLevelSliceFromState(state))],
+        };
+      }
       state.blockVariant = '1';
       state.blockBrushEmbed = 'none';
       state.blockBrushPortalDestination = { destinationX: 4, destinationY: 4 };
       state.blockBrushPickingPortalExit = false;
-      const firstHiddenPu = parsed.entities?.find((e) => e.type === 'powerup' && e.hidden);
+      const firstHiddenPu = state.entities?.find((e) => e.type === 'powerup' && e.hidden);
       state.blockBrushHiddenPowerupTargets = firstHiddenPu
         ? brushTargetsFromEntity(firstHiddenPu)
         : createDefaultHiddenPowerupTargets();
