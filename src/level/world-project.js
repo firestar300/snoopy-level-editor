@@ -173,6 +173,62 @@ export const serializeProjectForExport = (state) => {
  * @param {object} data
  * @returns {{ world: { name: string, activeStageIndex: number, stages: object[] } } | null}
  */
+/**
+ * Stages contributed by one parsed JSON root (single level or multi-stage world).
+ * @param {object} data
+ * @returns {{ worldName: string | null, stages: object[] }}
+ */
+export const stagesFromImportDocument = (data) => {
+  const worldDoc = parseWorldDocumentFromImportData(data);
+  if (worldDoc) {
+    return {
+      worldName: worldDoc.world.name,
+      stages: worldDoc.world.stages.map((s) => deepCloneLevelSlice(s)),
+    };
+  }
+  if (data && typeof data === 'object' && Array.isArray(data.tiles)) {
+    const slice = sliceFromLooseLevelJson(data);
+    const levelName =
+      typeof data.name === 'string' && data.name.trim() ? data.name.trim() : slice.name;
+    return {
+      worldName: levelName,
+      stages: [deepCloneLevelSlice({ ...slice, name: levelName })],
+    };
+  }
+  throw new Error('Unrecognized level or world JSON');
+};
+
+/**
+ * Merge several imported documents into one world (stages appended in file order).
+ * @param {{ fileName?: string, data: object }[]} documents
+ * @returns {{ world: { name: string, activeStageIndex: number, stages: object[] } }}
+ */
+export const mergeImportDocumentsToWorld = (documents) => {
+  if (!documents?.length) throw new Error('No files selected.');
+  let worldName = null;
+  const stages = [];
+  const errors = [];
+  for (const { fileName, data } of documents) {
+    try {
+      const chunk = stagesFromImportDocument(data);
+      if (chunk.worldName && worldName == null) worldName = chunk.worldName;
+      stages.push(...chunk.stages);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(fileName ? `${fileName}: ${msg}` : msg);
+    }
+  }
+  if (errors.length) throw new Error(errors.join('\n'));
+  if (!stages.length) throw new Error('No levels found in the selected files.');
+  return {
+    world: {
+      name: worldName || String(stages[0]?.name || '').trim() || DEFAULT_WORLD_NAME,
+      activeStageIndex: 0,
+      stages,
+    },
+  };
+};
+
 export const parseWorldDocumentFromImportData = (data) => {
   if (!data || typeof data !== 'object') return null;
   const hasRootTiles = Array.isArray(data.tiles);

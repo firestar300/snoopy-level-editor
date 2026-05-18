@@ -10,6 +10,7 @@ import {
   isBlockPushableToolbarShortcutChar,
   isBreakableTileChar,
   isEmbeddablePushableBlockChar,
+  isOmniPushableBlockChar,
   MUSIC_TRACKS,
   normalizeMusicPair,
   stageBgmThemeLabel,
@@ -35,7 +36,7 @@ import {
   firstInvalidWorldStage,
   loadWorldStageIndex,
   persistActiveWorldStage,
-  parseWorldDocumentFromImportData,
+  mergeImportDocumentsToWorld,
   computeWorldStageReorderTargetIndex,
   removeWorldStageAt,
   reorderWorldStage,
@@ -446,8 +447,11 @@ const isEntityMoveDropValid = (state, entityIndex, toX, toY) => {
   if (toX < 0 || toX >= GRID_WIDTH || toY < 0 || toY >= GRID_HEIGHT) return false;
   if (state.startPosition.x === toX && state.startPosition.y === toY) return false;
   if (getTileChar(state, toX, toY) !== '0') return false;
-  if (state.entities.some((o, i) => i !== entityIndex && o.x === toX && o.y === toY)) return false;
-  return true;
+  const others = state.entities.filter((o, i) => i !== entityIndex && o.x === toX && o.y === toY);
+  if (others.length === 0) return true;
+  const moving = state.entities[entityIndex];
+  if (others.length === 1 && canCoexistOnSameCell(moving.type, others[0].type)) return true;
+  return false;
 };
 
 const moveEntityWithIndexTo = (state, idx, toX, toY) => {
@@ -505,6 +509,22 @@ const appendPlayerStartMovePreviewLayer = (cell, isInvalid) => {
 const findEntityIndexAt = (state, x, y) =>
   state.entities.findIndex((e) => e.x === x && e.y === y);
 
+const findEntityIndexAtCell = (state, x, y, type) =>
+  state.entities.findIndex((e) => e.x === x && e.y === y && e.type === type);
+
+const entitiesAtCell = (state, x, y) => state.entities.filter((e) => e.x === x && e.y === y);
+
+/** Ball and Woodstock may share an empty floor cell. */
+const canCoexistOnSameCell = (typeA, typeB) =>
+  (typeA === 'ball' && typeB === 'woodstock') || (typeA === 'woodstock' && typeB === 'ball');
+
+const canPlaceToolbarEntityAt = (state, x, y, placingType) => {
+  const here = entitiesAtCell(state, x, y).filter((e) => !e.hidden);
+  if (here.length === 0) return true;
+  if (here.length === 1 && canCoexistOnSameCell(placingType, here[0].type)) return true;
+  return false;
+};
+
 const hasEntityOnCell = (state, x, y) => state.entities.some((e) => e.x === x && e.y === y);
 
 const isPlayerStartCell = (state, x, y) =>
@@ -551,6 +571,50 @@ const getPrimaryEntityIndexAtCell = (state, x, y) => {
     }) ?? here[0];
   const idx = state.entities.indexOf(primary);
   return idx === -1 ? null : idx;
+};
+
+const visibleEntitiesForCellOverlay = (entitiesHere, tileForBonusBadge) =>
+  entitiesHere.filter((e) => {
+    if (tileForBonusBadge) {
+      if (e.type === 'powerup' && e.hidden) return false;
+      if (e.type === 'portal' && e.hidden) return false;
+    }
+    return true;
+  });
+
+const sortEntitiesForCellOverlay = (list) =>
+  [...list].sort((a, b) => {
+    if (a.type === 'woodstock' && b.type === 'ball') return -1;
+    if (a.type === 'ball' && b.type === 'woodstock') return 1;
+    return 0;
+  });
+
+const appendEntityOverlayToContainer = (container, ent, iconPx) => {
+  const wrap = document.createElement('div');
+  wrap.className = 'editor__entity';
+  const px = iconPx ?? Math.round(GRID_TILE_PX * 0.88);
+  if (ent.type === 'portal') {
+    const def = ENTITY_PALETTE.find((p) => p.type === 'portal');
+    const d = document.createElement('div');
+    d.className = 'editor__entity-icon';
+    d.setAttribute('role', 'img');
+    d.setAttribute('aria-label', 'portal');
+    d.style.cssText = `${tileStyleFromSheet(def.sheet.sx, def.sheet.sy, CELL_PORTAL_ICON_PX)};width:${CELL_PORTAL_ICON_PX}px;height:${CELL_PORTAL_ICON_PX}px`;
+    wrap.appendChild(d);
+  } else {
+    const d = document.createElement('div');
+    d.className = 'editor__entity-icon';
+    d.setAttribute('role', 'img');
+    d.setAttribute('aria-label', ent.type);
+    const outSize =
+      ent.type === 'ball' && container.querySelector('.editor__entity') ? Math.round(px * 0.72) : px;
+    d.style.cssText = getEntitySpriteStyle(
+      ent.type,
+      ent.type === 'powerup' ? { powerType: ent.powerType, outSize } : { outSize }
+    );
+    wrap.appendChild(d);
+  }
+  container.appendChild(wrap);
 };
 
 /** Portals / power-ups whose exit points at this cell (excluding self-target). Hidden power-ups use `targets` per direction when present. */
@@ -777,6 +841,9 @@ const normalizeImportedEntitiesInPlace = (entities) => {
   });
 };
 
+const isBlockBrushPowerupEmbed = (embed) =>
+  embed === 'powerup' || embed === 'speed' || embed === 'timer';
+
 const createDefaultHiddenPowerupTargets = () => ({
   up: { x: 4, y: 4 },
   down: { x: 4, y: 4 },
@@ -804,6 +871,23 @@ const brushTargetsFromEntity = (e) => {
   const pt = { x: d.destinationX, y: d.destinationY };
   for (const dir of HIDDEN_POWERUP_TARGET_DIRS) out[dir] = { ...pt };
   return out;
+};
+
+/** Read unified bonus exit from a hidden power-up entity (pushable brush UI). */
+const brushHiddenBonusDestinationFromEntity = (e) => {
+  if (e.type !== 'powerup' || !e.hidden) return clampDestination(4, 4);
+  const { mixedTargets } = syncHiddenPowerupDestinationFromTargets(e);
+  if (!mixedTargets) syncHiddenPowerupTargetsFromDestination(e);
+  return clampDestination(e.destinationX ?? 4, e.destinationY ?? 4);
+};
+
+/** Apply unified brush destination to hidden power-up JSON (`targets` duplicated per direction). */
+const applyBrushHiddenBonusDestinationToEntity = (e, dest) => {
+  if (e.type !== 'powerup' || !e.hidden) return;
+  const d = clampDestination(dest.destinationX ?? 0, dest.destinationY ?? 0);
+  e.destinationX = d.destinationX;
+  e.destinationY = d.destinationY;
+  syncHiddenPowerupTargetsFromDestination(e);
 };
 
 /** Write brush `targets` onto hidden power-up; keep `destinationX` / `destinationY` aligned with `up` for compatibility. */
@@ -844,6 +928,7 @@ const syncSelectionPanelFromCell = (state, x, y) => {
   if (c === '1') {
     state.blockBrushEmbed = 'none';
     state.blockBrushPortalDestination = { destinationX: 4, destinationY: 4 };
+    state.blockBrushHiddenBonusDestination = { destinationX: 4, destinationY: 4 };
     state.blockBrushHiddenPowerupTargets = createDefaultHiddenPowerupTargets();
     state.blockBrushPickingHiddenPowerupExitDir = null;
     return;
@@ -864,9 +949,13 @@ const syncSelectionPanelFromCell = (state, x, y) => {
       if (e.powerType === 'time') embed = 'timer';
       else if (e.powerType === 'speed') embed = 'speed';
       else embed = 'powerup';
-      const { mixedTargets } = syncHiddenPowerupDestinationFromTargets(e);
-      if (!mixedTargets) syncHiddenPowerupTargetsFromDestination(e);
-      state.blockBrushHiddenPowerupTargets = brushTargetsFromEntity(e);
+      if (isOmniPushableBlockChar(c)) {
+        const { mixedTargets } = syncHiddenPowerupDestinationFromTargets(e);
+        if (!mixedTargets) syncHiddenPowerupTargetsFromDestination(e);
+        state.blockBrushHiddenPowerupTargets = brushTargetsFromEntity(e);
+      } else {
+        state.blockBrushHiddenBonusDestination = brushHiddenBonusDestinationFromEntity(e);
+      }
     }
   }
   state.blockBrushEmbed = embed;
@@ -898,7 +987,7 @@ const syncBlockBrushEmbeddedEntity = (state, x, y) => {
 
   removeHiddenPortalOrPowerupAt(state, x, y);
 
-  if (state.blockBrushEmbed === 'powerup' || state.blockBrushEmbed === 'timer' || state.blockBrushEmbed === 'speed') {
+  if (isBlockBrushPowerupEmbed(state.blockBrushEmbed)) {
     const neu = makeEntity('powerup', x, y);
     neu.hidden = true;
     neu.blockX = x;
@@ -906,7 +995,9 @@ const syncBlockBrushEmbeddedEntity = (state, x, y) => {
     if (state.blockBrushEmbed === 'timer') neu.powerType = 'time';
     else if (state.blockBrushEmbed === 'speed') neu.powerType = 'speed';
     else neu.powerType = 'invincible';
-    syncEntityTargetsFromBrushState(neu, state.blockBrushHiddenPowerupTargets);
+    if (isOmniPushableBlockChar(char))
+      syncEntityTargetsFromBrushState(neu, state.blockBrushHiddenPowerupTargets);
+    else applyBrushHiddenBonusDestinationToEntity(neu, state.blockBrushHiddenBonusDestination);
     state.entities.push(neu);
     return;
   }
@@ -948,28 +1039,36 @@ const syncBreakableHiddenBonus = (state, x, y) => {
   state.entities.push(neu);
 };
 
-const parseLevelImport = (raw) => {
-  const data = JSON.parse(raw);
-  const tilesIn = Array.isArray(data.tiles) ? data.tiles : [];
-  const tiles = [];
-  for (let y = 0; y < GRID_HEIGHT; y++) {
-    const row = String(tilesIn[y] || '').replace(/[^0-9A-E]/g, '0');
-    tiles.push(row.padEnd(GRID_WIDTH, '0').slice(0, GRID_WIDTH));
-  }
-  const entities = Array.isArray(data.entities) ? data.entities.map((e) => ({ ...e })) : [];
-  normalizeImportedEntitiesInPlace(entities);
-  const audio = normalizeMusicPair(data.music ?? createInitialState().music);
-  return {
-    name: data.name ?? 'Imported',
-    music: audio.music,
-    clearMusic: audio.clearMusic,
-    startPosition: {
-      x: Math.min(GRID_WIDTH - 1, Math.max(0, data.startPosition?.x ?? 4)),
-      y: Math.min(GRID_HEIGHT - 1, Math.max(0, data.startPosition?.y ?? 4)),
-    },
-    tiles,
-    entities,
+const applyImportedWorldToEditorState = (state, world) => {
+  state.world = {
+    name: world.name,
+    activeStageIndex: 0,
+    stages: world.stages.map((s) => deepCloneLevelSlice(s)),
   };
+  for (const slice of state.world.stages) normalizeImportedEntitiesInPlace(slice.entities);
+  applyLevelSliceToState(state, deepCloneLevelSlice(state.world.stages[0]));
+  state.blockVariant = '1';
+  state.blockBrushEmbed = 'none';
+  state.blockBrushPortalDestination = { destinationX: 4, destinationY: 4 };
+  state.blockBrushHiddenBonusDestination = { destinationX: 4, destinationY: 4 };
+  state.blockBrushPickingPortalExit = false;
+  state.blockBrushPickingHiddenBonusExit = false;
+  const firstHiddenPu = state.world.stages
+    .flatMap((s) => s.entities || [])
+    .find((e) => e.type === 'powerup' && e.hidden);
+  state.blockBrushHiddenPowerupTargets = firstHiddenPu
+    ? brushTargetsFromEntity(firstHiddenPu)
+    : createDefaultHiddenPowerupTargets();
+  if (firstHiddenPu) {
+    state.blockBrushHiddenBonusDestination = brushHiddenBonusDestinationFromEntity(firstHiddenPu);
+  }
+  state.blockBrushPickingHiddenPowerupExit = false;
+  state.blockBrushPickingHiddenPowerupExitDir = null;
+  state.blockBreakableBonus = 'none';
+  state.tool = { mode: 'tile', char: '1', tileEdit: 'add' };
+  state.selectedEntityIndex = null;
+  state.selectedTileCell = null;
+  state.inspectPlayerStart = false;
 };
 
 const copyText = async (text) => {
@@ -1000,6 +1099,8 @@ const resetEditorChromeToInitial = (state) => {
   state.blockBrushEmbed = next.blockBrushEmbed;
   state.blockBrushPortalDestination = { ...next.blockBrushPortalDestination };
   state.blockBrushPickingPortalExit = next.blockBrushPickingPortalExit;
+  state.blockBrushHiddenBonusDestination = { ...next.blockBrushHiddenBonusDestination };
+  state.blockBrushPickingHiddenBonusExit = next.blockBrushPickingHiddenBonusExit;
   state.blockBrushHiddenPowerupTargets = {
     up: { ...next.blockBrushHiddenPowerupTargets.up },
     down: { ...next.blockBrushHiddenPowerupTargets.down },
@@ -1041,6 +1142,12 @@ const isClearStageButtonDisabled = (state) => {
   )
     return false;
   if (state.blockBrushPickingPortalExit !== ref.blockBrushPickingPortalExit) return false;
+  if (
+    state.blockBrushHiddenBonusDestination.destinationX !== ref.blockBrushHiddenBonusDestination.destinationX ||
+    state.blockBrushHiddenBonusDestination.destinationY !== ref.blockBrushHiddenBonusDestination.destinationY
+  )
+    return false;
+  if (state.blockBrushPickingHiddenBonusExit !== ref.blockBrushPickingHiddenBonusExit) return false;
   for (const dir of HIDDEN_POWERUP_TARGET_DIRS) {
     const a = state.blockBrushHiddenPowerupTargets[dir];
     const b = ref.blockBrushHiddenPowerupTargets[dir];
@@ -1093,15 +1200,17 @@ export const mountEditor = (root) => {
             <label
               for="fld-import-map"
               class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--sidebar-import"
+              title="Select one or more JSON level or world files"
             >
               <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">upload</span>
-              <span class="editor__mode-label">Import Map</span>
+              <span class="editor__mode-label">Import maps</span>
               <input
                 id="fld-import-map"
                 type="file"
                 accept="application/json,.json"
                 class="visually-hidden"
                 data-action="import"
+                multiple
               />
             </label>
           </section>
@@ -1277,10 +1386,31 @@ export const mountEditor = (root) => {
                   </div>
                 </div>
                 <button type="button" class="editor__btn editor__btn--block-control" data-action="pick-portal-exit">
+                  <span class="material-symbols-outlined editor__btn--powerup-unify-icon" aria-hidden="true">select_all</span>
                   Pick on grid…
                 </button>
                 <p class="editor__hint editor__hint--pick" data-portal-pick-banner hidden role="status">
                   Click a cell for the portal exit (Escape to cancel).
+                </p>
+              </div>
+              <div class="editor__block-bonus-exit-pushable" data-bonus-exit-pushable hidden>
+                <h2 class="editor__section-title">Bonus exit</h2>
+                <div class="editor__row-fields">
+                  <div class="editor__field">
+                    <label for="fld-bonus-dx">Column</label>
+                    <select id="fld-bonus-dx" aria-label="Bonus exit column"></select>
+                  </div>
+                  <div class="editor__field">
+                    <label for="fld-bonus-dy">Row</label>
+                    <select id="fld-bonus-dy" aria-label="Bonus exit row"></select>
+                  </div>
+                </div>
+                <button type="button" class="editor__btn editor__btn--block-control" data-action="pick-bonus-exit">
+                  <span class="material-symbols-outlined editor__btn--powerup-unify-icon" aria-hidden="true">select_all</span>
+                  Pick on grid…
+                </button>
+                <p class="editor__hint editor__hint--pick" data-bonus-pick-banner hidden role="status">
+                  Click a cell for the bonus exit (Escape to cancel).
                 </p>
               </div>
             </div>
@@ -1288,8 +1418,8 @@ export const mountEditor = (root) => {
               <div class="editor__powerup-exit-intro">
                 <h2 class="editor__section-title">Bonus exit by direction</h2>
                 <p class="editor__powerup-exit-lead">
-                  Each direction maps to <code>targets</code> in JSON. <strong>Push</strong> uses the push axis;
-                  <strong>break</strong> uses Snoopy's facing when the block breaks.
+                  Each direction maps to <code>targets</code> in JSON. When the block breaks, Snoopy's facing
+                  chooses which exit applies.
                 </p>
               </div>
               <fieldset class="editor__powerup-targets-fieldset">
@@ -1424,6 +1554,7 @@ export const mountEditor = (root) => {
     btnWorldPlayNow: root.querySelector('[data-action="world-play-now"]'),
     btnWorldDownload: root.querySelector('[data-action="world-download"]'),
     worldStagesRow: root.querySelector('[data-world-stages-row]'),
+    worldStagesScroll: root.querySelector('.editor__world-stages-scroll-cards'),
     btnWorldAddStage: root.querySelector('[data-action="world-add-stage"]'),
     worldAddHint: root.querySelector('[data-world-add-hint]'),
     blockBrush: root.querySelector('[data-block-brush]'),
@@ -1440,6 +1571,11 @@ export const mountEditor = (root) => {
     fldPortalDx: root.querySelector('#fld-portal-dx'),
     fldPortalDy: root.querySelector('#fld-portal-dy'),
     portalPickBanner: root.querySelector('[data-portal-pick-banner]'),
+    bonusExitPushablePanel: root.querySelector('[data-bonus-exit-pushable]'),
+    fldBonusDx: root.querySelector('#fld-bonus-dx'),
+    fldBonusDy: root.querySelector('#fld-bonus-dy'),
+    bonusPickBanner: root.querySelector('[data-bonus-pick-banner]'),
+    btnPickBonusExit: root.querySelector('[data-action="pick-bonus-exit"]'),
     powerupExitPanel: root.querySelector('[data-powerup-exit]'),
     powerupPickBanner: root.querySelector('[data-powerup-pick-banner]'),
     gridWrap: root.querySelector('[data-grid-wrap]'),
@@ -1503,6 +1639,19 @@ export const mountEditor = (root) => {
   /** @type {{ fromIdx: number, pointerId: number, startX: number, startY: number, active: boolean, card: HTMLElement, ghost: HTMLElement | null, offsetX: number, offsetY: number, stride: number, dropOverIdx: number, dropInsertAfter: boolean } | null} */
   let worldStageReorderPointer = null;
   let worldStageDidReorder = false;
+  let worldStageLastScrolledActiveIndex = -1;
+  let worldStagePendingScrollActive = false;
+
+  const scrollActiveWorldStageIntoView = (behavior = 'smooth') => {
+    if (worldStageReorderPointer?.active) return;
+    const scrollEl = els.worldStagesScroll;
+    const row = els.worldStagesRow;
+    if (!scrollEl || !row) return;
+    const activeIdx = state.world?.activeStageIndex ?? 0;
+    const card = row.querySelector(`.editor__world-stage-card[data-stage-index="${activeIdx}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior, block: 'nearest', inline: 'center' });
+  };
 
   const getWorldStageCardStride = () => {
     const row = els.worldStagesRow;
@@ -1606,6 +1755,7 @@ export const mountEditor = (root) => {
     if (!drag.active) return;
     if (toIndex !== drag.fromIdx && reorderWorldStage(state, drag.fromIdx, toIndex)) {
       worldStageDidReorder = true;
+      worldStagePendingScrollActive = true;
       render();
     }
   };
@@ -1717,6 +1867,7 @@ export const mountEditor = (root) => {
     if (state.blockVariant === '1') {
       state.blockBrushEmbed = 'none';
       state.blockBrushPickingPortalExit = false;
+      state.blockBrushPickingHiddenBonusExit = false;
       state.blockBrushPickingHiddenPowerupExit = false;
       state.blockBrushPickingHiddenPowerupExitDir = null;
     }
@@ -1724,6 +1875,20 @@ export const mountEditor = (root) => {
       const { x: sx, y: sy } = state.selectedTileCell;
       const tc = getTileChar(state, sx, sy);
       if (isBlockBrushChar(tc)) {
+        if (isBlockBrushPowerupEmbed(state.blockBrushEmbed)) {
+          if (isOmniPushableBlockChar(state.blockVariant)) {
+            const d = state.blockBrushHiddenBonusDestination;
+            const pt = { x: d.destinationX, y: d.destinationY };
+            for (const dir of HIDDEN_POWERUP_TARGET_DIRS)
+              state.blockBrushHiddenPowerupTargets[dir] = { ...pt };
+          } else if (isEmbeddablePushableBlockChar(state.blockVariant)) {
+            const t = state.blockBrushHiddenPowerupTargets.up;
+            state.blockBrushHiddenBonusDestination = {
+              destinationX: t.x,
+              destinationY: t.y,
+            };
+          }
+        }
         setTileChar(state, sx, sy, state.blockVariant);
         syncBlockBrushEmbeddedEntity(state, sx, sy);
       }
@@ -1747,17 +1912,28 @@ export const mountEditor = (root) => {
     render();
   });
 
+  const fillPortalAxisSelects = (sel, count) => {
+    if (!sel || sel.options.length) return;
+    for (let i = 0; i < count; i++) {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = String(i + 1);
+      sel.appendChild(o);
+    }
+  };
+  fillPortalAxisSelects(els.fldPortalDx, GRID_WIDTH);
+  fillPortalAxisSelects(els.fldPortalDy, GRID_HEIGHT);
   for (let ix = 0; ix < GRID_WIDTH; ix++) {
     const o = document.createElement('option');
     o.value = String(ix);
     o.textContent = String(ix + 1);
-    els.fldPortalDx.appendChild(o);
+    els.fldBonusDx?.appendChild(o);
   }
   for (let iy = 0; iy < GRID_HEIGHT; iy++) {
     const o = document.createElement('option');
     o.value = String(iy);
     o.textContent = String(iy + 1);
-    els.fldPortalDy.appendChild(o);
+    els.fldBonusDy?.appendChild(o);
   }
 
   const fillPowerupTargetAxisSelects = () => {
@@ -1791,7 +1967,8 @@ export const mountEditor = (root) => {
       state.blockBrushEmbed !== 'speed' &&
       state.blockBrushEmbed !== 'timer'
     )
-      state.blockBrushPickingHiddenPowerupExit = false;
+      state.blockBrushPickingHiddenBonusExit = false;
+    state.blockBrushPickingHiddenPowerupExit = false;
     state.blockBrushPickingHiddenPowerupExitDir = null;
     if (state.tool.mode === 'tile' && getTileEdit(state) === 'select' && state.selectedTileCell) {
       const { x, y } = state.selectedTileCell;
@@ -1815,6 +1992,36 @@ export const mountEditor = (root) => {
       ? 0
       : Math.max(0, Math.min(GRID_HEIGHT - 1, v));
     pushPortalDestinationToSelectedHiddenPortal();
+    render();
+  });
+
+  const pushHiddenBonusDestinationToSelectedEntity = () => {
+    if (state.tool.mode !== 'tile' || getTileEdit(state) !== 'select' || !state.selectedTileCell) return;
+    const { x, y } = state.selectedTileCell;
+    const tc = getTileChar(state, x, y);
+    if (!isEmbeddablePushableBlockChar(tc) || isOmniPushableBlockChar(tc)) return;
+    const i = findEntityIndexAt(state, x, y);
+    if (i === -1) return;
+    const e = state.entities[i];
+    if (e.type !== 'powerup' || !e.hidden) return;
+    applyBrushHiddenBonusDestinationToEntity(e, state.blockBrushHiddenBonusDestination);
+  };
+
+  els.fldBonusDx?.addEventListener('change', () => {
+    const v = parseInt(els.fldBonusDx.value, 10);
+    state.blockBrushHiddenBonusDestination.destinationX = Number.isNaN(v)
+      ? 0
+      : Math.max(0, Math.min(GRID_WIDTH - 1, v));
+    pushHiddenBonusDestinationToSelectedEntity();
+    render();
+  });
+
+  els.fldBonusDy?.addEventListener('change', () => {
+    const v = parseInt(els.fldBonusDy.value, 10);
+    state.blockBrushHiddenBonusDestination.destinationY = Number.isNaN(v)
+      ? 0
+      : Math.max(0, Math.min(GRID_HEIGHT - 1, v));
+    pushHiddenBonusDestinationToSelectedEntity();
     render();
   });
 
@@ -1843,23 +2050,31 @@ export const mountEditor = (root) => {
     render();
   });
 
-  const canPickHiddenPowerupExitFromSelection = () => {
+  const canPickHiddenBonusExitFromSelection = () => {
     const tc =
       state.tool.mode === 'tile' && getTileEdit(state) === 'select' && state.selectedTileCell
         ? getTileChar(state, state.selectedTileCell.x, state.selectedTileCell.y)
         : '0';
-    const pushableOk =
+    return (
       isEmbeddablePushableBlockChar(tc) &&
-      (state.blockBrushEmbed === 'powerup' ||
-        state.blockBrushEmbed === 'speed' ||
-        state.blockBrushEmbed === 'timer');
-    const breakableOk = isBreakableTileChar(tc) && state.blockBreakableBonus !== 'none';
-    return pushableOk || breakableOk;
+      !isOmniPushableBlockChar(tc) &&
+      isBlockBrushPowerupEmbed(state.blockBrushEmbed)
+    );
+  };
+
+  const canPickDirectionalHiddenPowerupExitFromSelection = () => {
+    const tc =
+      state.tool.mode === 'tile' && getTileEdit(state) === 'select' && state.selectedTileCell
+        ? getTileChar(state, state.selectedTileCell.x, state.selectedTileCell.y)
+        : '0';
+    if (isBreakableTileChar(tc) && state.blockBreakableBonus !== 'none') return true;
+    return isOmniPushableBlockChar(tc) && isBlockBrushPowerupEmbed(state.blockBrushEmbed);
   };
 
   const toggleHiddenPowerupExitPick = (dir) => {
-    if (!canPickHiddenPowerupExitFromSelection()) return;
+    if (!canPickDirectionalHiddenPowerupExitFromSelection()) return;
     state.blockBrushPickingPortalExit = false;
+    state.blockBrushPickingHiddenBonusExit = false;
     if (state.blockBrushPickingHiddenPowerupExit && state.blockBrushPickingHiddenPowerupExitDir === dir) {
       state.blockBrushPickingHiddenPowerupExit = false;
       state.blockBrushPickingHiddenPowerupExitDir = null;
@@ -1879,7 +2094,7 @@ export const mountEditor = (root) => {
     toggleHiddenPowerupExitPick(dir);
   });
 
-  els.btnPickPortalExit.addEventListener('click', () => {
+  els.btnPickPortalExit?.addEventListener('click', () => {
     const tc =
       state.tool.mode === 'tile' && getTileEdit(state) === 'select' && state.selectedTileCell
         ? getTileChar(state, state.selectedTileCell.x, state.selectedTileCell.y)
@@ -1887,7 +2102,17 @@ export const mountEditor = (root) => {
     if (!isEmbeddablePushableBlockChar(tc) || state.blockBrushEmbed !== 'portal') return;
     state.blockBrushPickingHiddenPowerupExit = false;
     state.blockBrushPickingHiddenPowerupExitDir = null;
+    state.blockBrushPickingHiddenBonusExit = false;
     state.blockBrushPickingPortalExit = !state.blockBrushPickingPortalExit;
+    render();
+  });
+
+  els.btnPickBonusExit?.addEventListener('click', () => {
+    if (!canPickHiddenBonusExitFromSelection()) return;
+    state.blockBrushPickingPortalExit = false;
+    state.blockBrushPickingHiddenPowerupExit = false;
+    state.blockBrushPickingHiddenPowerupExitDir = null;
+    state.blockBrushPickingHiddenBonusExit = !state.blockBrushPickingHiddenBonusExit;
     render();
   });
 
@@ -1895,11 +2120,13 @@ export const mountEditor = (root) => {
     if (ev.key !== 'Escape') return;
     if (
       !state.blockBrushPickingPortalExit &&
+      !state.blockBrushPickingHiddenBonusExit &&
       !state.blockBrushPickingHiddenPowerupExit &&
       !state.tileMoveDrag
     )
       return;
     state.blockBrushPickingPortalExit = false;
+    state.blockBrushPickingHiddenBonusExit = false;
     state.blockBrushPickingHiddenPowerupExit = false;
     state.blockBrushPickingHiddenPowerupExitDir = null;
     clearTileMoveDrag();
@@ -2107,6 +2334,7 @@ export const mountEditor = (root) => {
     els.blockBrush.hidden = !showsTileInfo;
     if (!showsTileInfo) {
       if (state.blockBrushPickingPortalExit) state.blockBrushPickingPortalExit = false;
+      if (state.blockBrushPickingHiddenBonusExit) state.blockBrushPickingHiddenBonusExit = false;
       if (state.blockBrushPickingHiddenPowerupExit) state.blockBrushPickingHiddenPowerupExit = false;
       state.blockBrushPickingHiddenPowerupExitDir = null;
     }
@@ -2123,7 +2351,10 @@ export const mountEditor = (root) => {
     const embedChar = hasBlockSelection ? tc : state.tool.char;
     const embeddable = hasBlockSelection && isEmbeddablePushableBlockChar(embedChar);
     els.blockEmbed.hidden = !embeddable;
-    if (!embeddable) state.blockBrushPickingPortalExit = false;
+    if (!embeddable) {
+      state.blockBrushPickingPortalExit = false;
+      state.blockBrushPickingHiddenBonusExit = false;
+    }
     if (embeddable) els.fldBlockEmbed.value = state.blockBrushEmbed;
 
     const showPortalExit = embeddable && state.blockBrushEmbed === 'portal';
@@ -2134,24 +2365,33 @@ export const mountEditor = (root) => {
       els.fldPortalDx.value = String(Math.max(0, Math.min(GRID_WIDTH - 1, d.destinationX)));
       els.fldPortalDy.value = String(Math.max(0, Math.min(GRID_HEIGHT - 1, d.destinationY)));
     }
-
     els.portalPickBanner.hidden = !state.blockBrushPickingPortalExit;
 
-    const pushablePowerupDest =
-      embeddable &&
-      (state.blockBrushEmbed === 'powerup' ||
-        state.blockBrushEmbed === 'speed' ||
-        state.blockBrushEmbed === 'timer');
+    const cellCharForEmbed = hasBlockSelection ? tc : embedChar;
+    const pushableDirPowerupDest =
+      embeddable && isBlockBrushPowerupEmbed(state.blockBrushEmbed) && !isOmniPushableBlockChar(cellCharForEmbed);
+    const pushableOmniPowerupDest =
+      embeddable && isBlockBrushPowerupEmbed(state.blockBrushEmbed) && isOmniPushableBlockChar(cellCharForEmbed);
     const breakableNeedsDest =
       hasBlockSelection && isBreakableTileChar(tc) && state.blockBreakableBonus !== 'none';
-    const showHiddenPowerupDest = pushablePowerupDest || breakableNeedsDest;
-    if (!showHiddenPowerupDest && state.blockBrushPickingHiddenPowerupExit) {
+    const needsDirectionalPowerupExit = breakableNeedsDest || pushableOmniPowerupDest;
+    if (!pushableDirPowerupDest && state.blockBrushPickingHiddenBonusExit)
+      state.blockBrushPickingHiddenBonusExit = false;
+    if (!needsDirectionalPowerupExit && state.blockBrushPickingHiddenPowerupExit) {
       state.blockBrushPickingHiddenPowerupExit = false;
       state.blockBrushPickingHiddenPowerupExitDir = null;
     }
 
-    els.powerupExitPanel.hidden = !showHiddenPowerupDest;
-    if (showHiddenPowerupDest) {
+    els.bonusExitPushablePanel.hidden = !pushableDirPowerupDest;
+    if (pushableDirPowerupDest) {
+      const d = state.blockBrushHiddenBonusDestination;
+      els.fldBonusDx.value = String(Math.max(0, Math.min(GRID_WIDTH - 1, d.destinationX)));
+      els.fldBonusDy.value = String(Math.max(0, Math.min(GRID_HEIGHT - 1, d.destinationY)));
+    }
+    els.bonusPickBanner.hidden = !state.blockBrushPickingHiddenBonusExit;
+
+    els.powerupExitPanel.hidden = !needsDirectionalPowerupExit;
+    if (needsDirectionalPowerupExit) {
       const t = state.blockBrushHiddenPowerupTargets;
       els.powerupExitPanel.querySelectorAll('.editor__fld-powerup-tx').forEach((sel) => {
         const dir = sel.dataset.dir;
@@ -2180,7 +2420,9 @@ export const mountEditor = (root) => {
     }
     els.gridWrap.classList.toggle(
       'editor__grid-wrap--picking-portal',
-      state.blockBrushPickingPortalExit || state.blockBrushPickingHiddenPowerupExit
+      state.blockBrushPickingPortalExit ||
+        state.blockBrushPickingHiddenBonusExit ||
+        state.blockBrushPickingHiddenPowerupExit
     );
   };
 
@@ -2309,10 +2551,22 @@ export const mountEditor = (root) => {
         </div>`;
     } else if (e.type === 'powerup') {
       if (e.hidden) {
-        html += `<p class="editor__hint editor__hint--spaced">
+        const tileUnder = getTileChar(state, e.x, e.y);
+        if (isBreakableTileChar(tileUnder) || isOmniPushableBlockChar(tileUnder)) {
+          html += `<p class="editor__hint editor__hint--spaced">
           Hidden power-ups are edited with <strong>Block behavior</strong>, <strong>Hidden content</strong>,
           and <strong>Bonus exit by direction</strong> when this block cell is selected (not here).
         </p>`;
+        } else if (isEmbeddablePushableBlockChar(tileUnder)) {
+          html += `<p class="editor__hint editor__hint--spaced">
+          Hidden power-ups are edited with <strong>Block behavior</strong>, <strong>Hidden content</strong>,
+          and <strong>Bonus exit</strong> when this block cell is selected (not here).
+        </p>`;
+        } else {
+          html += `<p class="editor__hint editor__hint--spaced">
+          Hidden power-ups are edited from the block panel when this cell is selected (not here).
+        </p>`;
+        }
       } else {
         html += `
         <div class="editor__field"><label>powerType</label>
@@ -2326,16 +2580,24 @@ export const mountEditor = (root) => {
           <textarea data-k="targetsJson" rows="4" class="editor__json" style="min-height:4rem"></textarea>
         </div>`;
       }
+    } else if (e.type === 'portal' && e.hidden) {
+      html += `<p class="editor__hint editor__hint--spaced">
+          Edit this portal with <strong>Hidden content</strong> and <strong>Portal exit</strong>
+          (Column / Row and pick on grid) when this block cell is selected.
+        </p>`;
     } else if (e.type === 'portal') {
       html += `
         <div class="editor__row-fields">
-          <div class="editor__field"><label>destinationX</label><input type="number" data-k="destinationX" min="0" max="8" /></div>
-          <div class="editor__field"><label>destinationY</label><input type="number" data-k="destinationY" min="0" max="7" /></div>
+          <div class="editor__field"><label for="fld-ent-${idx}-dest-x">Exit column</label>
+            <select id="fld-ent-${idx}-dest-x" data-k="destinationX" aria-label="Portal exit column">${gridAxisOptionsHtml('x', e.destinationX ?? 0)}</select></div>
+          <div class="editor__field"><label for="fld-ent-${idx}-dest-y">Exit row</label>
+            <select id="fld-ent-${idx}-dest-y" data-k="destinationY" aria-label="Portal exit row">${gridAxisOptionsHtml('y', e.destinationY ?? 0)}</select></div>
         </div>
-        <div class="editor__field"><label><input type="checkbox" data-k="hidden" /> Hidden in block</label></div>
         <div class="editor__row-fields">
-          <div class="editor__field"><label>blockX</label><input type="number" data-k="blockX" min="0" max="8" /></div>
-          <div class="editor__field"><label>blockY</label><input type="number" data-k="blockY" min="0" max="7" /></div>
+          <div class="editor__field"><label for="fld-ent-${idx}-x">Column</label>
+            <select id="fld-ent-${idx}-x" data-k="x" aria-label="Grid column">${gridAxisOptionsHtml('x', e.x)}</select></div>
+          <div class="editor__field"><label for="fld-ent-${idx}-y">Row</label>
+            <select id="fld-ent-${idx}-y" data-k="y" aria-label="Grid row">${gridAxisOptionsHtml('y', e.y)}</select></div>
         </div>`;
     }
 
@@ -2382,13 +2644,6 @@ export const mountEditor = (root) => {
       els.tileEntityPanelBody.querySelector('[data-k="powerType"]').value = e.powerType || 'invincible';
       const tj = els.tileEntityPanelBody.querySelector('[data-k="targetsJson"]');
       if (tj) tj.value = e.targets ? JSON.stringify(e.targets, null, 2) : '';
-    }
-    if (e.type === 'portal') {
-      els.tileEntityPanelBody.querySelector('[data-k="destinationX"]').value = String(e.destinationX ?? 0);
-      els.tileEntityPanelBody.querySelector('[data-k="destinationY"]').value = String(e.destinationY ?? 0);
-      els.tileEntityPanelBody.querySelector('[data-k="hidden"]').checked = !!e.hidden;
-      els.tileEntityPanelBody.querySelector('[data-k="blockX"]').value = String(e.blockX ?? e.x);
-      els.tileEntityPanelBody.querySelector('[data-k="blockY"]').value = String(e.blockY ?? e.y);
     }
 
     const delEntityBtn = els.tileEntityPanelBody.querySelector('[data-del-entity]');
@@ -2456,15 +2711,24 @@ export const mountEditor = (root) => {
         });
       }
     }
-    if (e.type === 'portal') {
-      bindNum('[data-k="destinationX"]', 'destinationX');
-      bindNum('[data-k="destinationY"]', 'destinationY');
-      els.tileEntityPanelBody.querySelector('[data-k="hidden"]').addEventListener('change', (ev) => {
-        state.entities[idx].hidden = ev.target.checked;
+    const bindEntityAxisKey = (key, axis) => {
+      const max = axis === 'x' ? GRID_WIDTH - 1 : GRID_HEIGHT - 1;
+      const el = els.tileEntityPanelBody.querySelector(`[data-k="${key}"]`);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        let v = parseInt(el.value, 10);
+        if (Number.isNaN(v)) v = 0;
+        v = Math.max(0, Math.min(max, v));
+        state.entities[idx][key] = v;
         render();
       });
-      bindNum('[data-k="blockX"]', 'blockX');
-      bindNum('[data-k="blockY"]', 'blockY');
+    };
+
+    if (e.type === 'portal' && !e.hidden) {
+      bindEntityAxisKey('destinationX', 'x');
+      bindEntityAxisKey('destinationY', 'y');
+      bindEntityGridAxis('x');
+      bindEntityGridAxis('y');
     }
   };
 
@@ -2567,37 +2831,10 @@ export const mountEditor = (root) => {
       cell.appendChild(badge);
     }
 
-    const primaryForOverlay = entitiesHere.find((e) => {
-      if (!tileForBonusBadge) return true;
-      if (e.type === 'powerup' && e.hidden) return false;
-      if (e.type === 'portal' && e.hidden) return false;
-      return true;
-    });
-    if (primaryForOverlay) {
-      const ent = primaryForOverlay;
-      const wrap = document.createElement('div');
-      wrap.className = 'editor__entity';
-      if (ent.type === 'portal') {
-        const def = ENTITY_PALETTE.find((p) => p.type === 'portal');
-        const d = document.createElement('div');
-        d.className = 'editor__entity-icon';
-        d.setAttribute('role', 'img');
-        d.setAttribute('aria-label', 'portal');
-        d.style.cssText = `${tileStyleFromSheet(def.sheet.sx, def.sheet.sy, CELL_PORTAL_ICON_PX)};width:${CELL_PORTAL_ICON_PX}px;height:${CELL_PORTAL_ICON_PX}px`;
-        wrap.appendChild(d);
-      } else {
-        const d = document.createElement('div');
-        d.className = 'editor__entity-icon';
-        d.setAttribute('role', 'img');
-        d.setAttribute('aria-label', ent.type);
-        d.style.cssText = getEntitySpriteStyle(
-          ent.type,
-          ent.type === 'powerup' ? { powerType: ent.powerType } : {}
-        );
-        wrap.appendChild(d);
-      }
-      cell.appendChild(wrap);
-    }
+    const visibleOnCell = sortEntitiesForCellOverlay(
+      visibleEntitiesForCellOverlay(entitiesHere, tileForBonusBadge)
+    );
+    for (const ent of visibleOnCell) appendEntityOverlayToContainer(cell, ent);
 
     const hideStartDuringPlayerDrag =
       d &&
@@ -2827,6 +3064,14 @@ export const mountEditor = (root) => {
         hint.textContent = '';
       }
     }
+
+    const activeIdx = w.activeStageIndex;
+    if (worldStagePendingScrollActive || activeIdx !== worldStageLastScrolledActiveIndex) {
+      worldStagePendingScrollActive = false;
+      const behavior = worldStageLastScrolledActiveIndex < 0 ? 'instant' : 'smooth';
+      worldStageLastScrolledActiveIndex = activeIdx;
+      queueMicrotask(() => scrollActiveWorldStageIntoView(behavior));
+    }
   };
 
   const render = () => {
@@ -2945,6 +3190,7 @@ export const mountEditor = (root) => {
       state.blockVariant = '1';
       state.blockBrushEmbed = 'none';
       state.blockBrushPickingPortalExit = false;
+      state.blockBrushPickingHiddenBonusExit = false;
       state.blockBrushPickingHiddenPowerupExit = false;
       state.blockBrushPickingHiddenPowerupExitDir = null;
       state.tool = { mode: 'tile', char: '1', tileEdit: 'add' };
@@ -3037,13 +3283,15 @@ export const mountEditor = (root) => {
         render();
         return;
       }
-      if (i !== -1 && state.entities[i].type === state.tool.entityType) {
-        state.selectedEntityIndex = i;
+      const sameTypeIdx = findEntityIndexAtCell(state, x, y, state.tool.entityType);
+      if (sameTypeIdx !== -1) {
+        state.selectedEntityIndex = sameTypeIdx;
         render();
         return;
       }
-      if (i !== -1) {
-        state.selectedEntityIndex = getPrimaryEntityIndexAtCell(state, x, y) ?? i;
+      if (!canPlaceToolbarEntityAt(state, x, y, state.tool.entityType)) {
+        const primaryIdx = getPrimaryEntityIndexAtCell(state, x, y);
+        if (primaryIdx != null) state.selectedEntityIndex = primaryIdx;
         render();
         return;
       }
@@ -3058,7 +3306,7 @@ export const mountEditor = (root) => {
       const neu = makeEntity(state.tool.entityType, x, y);
       if (!neu) return;
       state.entities.push(neu);
-      state.selectedEntityIndex = findEntityIndexAt(state, x, y);
+      state.selectedEntityIndex = findEntityIndexAtCell(state, x, y, state.tool.entityType);
     }
     render();
   };
@@ -3068,6 +3316,17 @@ export const mountEditor = (root) => {
       state.blockBrushPortalDestination = { destinationX: x, destinationY: y };
       state.blockBrushPickingPortalExit = false;
       pushPortalDestinationToSelectedHiddenPortal();
+      render();
+      return true;
+    }
+    if (state.blockBrushPickingHiddenBonusExit) {
+      const d = clampDestination(x, y);
+      state.blockBrushHiddenBonusDestination = {
+        destinationX: d.destinationX,
+        destinationY: d.destinationY,
+      };
+      state.blockBrushPickingHiddenBonusExit = false;
+      pushHiddenBonusDestinationToSelectedEntity();
       render();
       return true;
     }
@@ -3107,6 +3366,7 @@ export const mountEditor = (root) => {
       getTileEdit(state) === 'select' &&
       ev.button === 0 &&
       !state.blockBrushPickingPortalExit &&
+      !state.blockBrushPickingHiddenBonusExit &&
       !state.blockBrushPickingHiddenPowerupExit
     ) {
       applySelectCellCore(state, x, y);
@@ -3167,6 +3427,7 @@ export const mountEditor = (root) => {
       state.tool.mode === 'entity' &&
       ev.button === 0 &&
       !state.blockBrushPickingPortalExit &&
+      !state.blockBrushPickingHiddenBonusExit &&
       !state.blockBrushPickingHiddenPowerupExit &&
       state.selectedEntityIndex != null &&
       state.entities[state.selectedEntityIndex] &&
@@ -3248,7 +3509,12 @@ export const mountEditor = (root) => {
 
   els.grid.addEventListener('mouseenter', (ev) => {
     if (state.tileMoveDrag) return;
-    if (state.blockBrushPickingPortalExit || state.blockBrushPickingHiddenPowerupExit) return;
+    if (
+      state.blockBrushPickingPortalExit ||
+      state.blockBrushPickingHiddenBonusExit ||
+      state.blockBrushPickingHiddenPowerupExit
+    )
+      return;
     if (!painting || state.tool.mode !== 'tile' || getTileEdit(state) !== 'add') return;
     const cell = ev.target.closest('.editor__cell');
     if (!cell) return;
@@ -3283,53 +3549,28 @@ export const mountEditor = (root) => {
     copyText(serializeProjectForExport(state));
   });
   root.querySelector('[data-action="import"]').addEventListener('change', async (ev) => {
-    const file = ev.target.files?.[0];
+    const files = [...(ev.target.files || [])];
     ev.target.value = '';
-    if (!file) return;
-    const text = await file.text();
+    if (!files.length) return;
+    const sorted = files.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+    );
     try {
-      const data = JSON.parse(text);
-      const worldDoc = parseWorldDocumentFromImportData(data);
-      if (worldDoc) {
-        state.world = {
-          name: worldDoc.world.name,
-          activeStageIndex: worldDoc.world.activeStageIndex,
-          stages: worldDoc.world.stages.map((s) => deepCloneLevelSlice(s)),
-        };
-        for (const s of state.world.stages) normalizeImportedEntitiesInPlace(s.entities);
-        applyLevelSliceToState(
-          state,
-          deepCloneLevelSlice(state.world.stages[state.world.activeStageIndex])
-        );
-      } else {
-        const parsed = parseLevelImport(text);
-        Object.assign(state, parsed);
-        delete state.id;
-        state.world = {
-          name: DEFAULT_WORLD_NAME,
-          activeStageIndex: 0,
-          stages: [deepCloneLevelSlice(extractLevelSliceFromState(state))],
-        };
-      }
-      state.blockVariant = '1';
-      state.blockBrushEmbed = 'none';
-      state.blockBrushPortalDestination = { destinationX: 4, destinationY: 4 };
-      state.blockBrushPickingPortalExit = false;
-      const firstHiddenPu = state.entities?.find((e) => e.type === 'powerup' && e.hidden);
-      state.blockBrushHiddenPowerupTargets = firstHiddenPu
-        ? brushTargetsFromEntity(firstHiddenPu)
-        : createDefaultHiddenPowerupTargets();
-      state.blockBrushPickingHiddenPowerupExit = false;
-      state.blockBrushPickingHiddenPowerupExitDir = null;
-      state.blockBreakableBonus = 'none';
-      state.tool = { mode: 'tile', char: '1', tileEdit: 'add' };
-      state.selectedEntityIndex = null;
-      state.selectedTileCell = null;
-      state.inspectPlayerStart = false;
+      const documents = await Promise.all(
+        sorted.map(async (file) => ({
+          fileName: file.name,
+          data: JSON.parse(await file.text()),
+        })),
+      );
+      const { world } = mergeImportDocumentsToWorld(documents);
+      applyImportedWorldToEditorState(state, world);
+      worldStageLastScrolledActiveIndex = -1;
+      worldStagePendingScrollActive = true;
       clearTileMoveDrag();
       render();
     } catch (err) {
-      window.alert(`Invalid JSON: ${err.message}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      window.alert(files.length > 1 ? `Import failed:\n${msg}` : `Invalid JSON: ${msg}`);
     }
   });
 

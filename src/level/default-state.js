@@ -38,6 +38,13 @@ export const createInitialState = () => {
     /** Next grid click sets blockBrushPortalDestination and clears. */
     blockBrushPickingPortalExit: false,
     /**
+     * Hidden bonus exit on directional pushables (A–D): one cell. Omni pushable (`2`) uses `blockBrushHiddenPowerupTargets`.
+     * Serialized to JSON as identical `targets` entries per direction.
+     */
+    blockBrushHiddenBonusDestination: { destinationX: 4, destinationY: 4 },
+    /** Next grid click sets blockBrushHiddenBonusDestination and clears. */
+    blockBrushPickingHiddenBonusExit: false,
+    /**
      * Per reveal direction (`up` / `down` / `left` / `right`): bonus exit tile `{ x, y }` (game JSON `targets`).
      * Pushable blocks use push direction; breakable blocks use Snoopy facing when breaking.
      */

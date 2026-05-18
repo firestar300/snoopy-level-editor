@@ -65,7 +65,7 @@ body {
   gap: 0.35rem;
   padding: 0.48rem 1.05rem;
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -80,7 +80,6 @@ body {
     0 6px 22px rgba(60, 90, 200, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.14);
   transition:
-    transform 0.16s ease,
     box-shadow 0.16s ease,
     filter 0.16s ease,
     background 0.16s ease;
@@ -101,11 +100,9 @@ body {
     0 2px 0 rgba(0, 0, 0, 0.35),
     0 8px 28px rgba(80, 110, 230, 0.48),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
-  transform: translateY(-1px);
 }
 
 .editor__btn.editor__btn--play-now:active:not(:disabled) {
-  transform: translateY(0);
   filter: brightness(0.94) saturate(0.95);
   box-shadow:
     0 0 0 1px rgba(90, 120, 220, 0.45),
@@ -228,22 +225,47 @@ body {
 
 .editor__world-stages-inner {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: stretch;
   gap: 0.65rem;
+  min-width: 0;
 }
 
 .editor__world-stages-scroll-cards {
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
-  padding-bottom: 0.15rem;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  padding-bottom: 0.35rem;
+}
+
+.editor__world-stages-scroll-cards::-webkit-scrollbar {
+  height: 8px;
+}
+
+.editor__world-stages-scroll-cards::-webkit-scrollbar-track {
+  background: #161c28;
+  border-radius: 4px;
+}
+
+.editor__world-stages-scroll-cards::-webkit-scrollbar-thumb {
+  background: #3d4a63;
+  border-radius: 4px;
+}
+
+.editor__world-stages-scroll-cards::-webkit-scrollbar-thumb:hover {
+  background: #4a5570;
 }
 
 .editor__world-stages {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 0.5rem;
+  width: max-content;
+  min-width: 100%;
 }
 
 .editor__world-stages--reordering .editor__world-stage-card {
@@ -1284,6 +1306,10 @@ label.editor__btn--sidebar-import:focus-within {
 }
 
 .editor__btn--block-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   width: 100%;
   margin-top: 0.35rem;
   padding: 0.4rem 0.5rem;

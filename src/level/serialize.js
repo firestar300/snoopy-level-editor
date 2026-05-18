@@ -8,7 +8,15 @@ import { GRID_HEIGHT, GRID_WIDTH } from './constants.js';
 export const buildLevelPayload = (state) => {
   const tiles = state.tiles.map((row) => row.slice(0, GRID_WIDTH).padEnd(GRID_WIDTH, '0'));
 
-  const entities = state.entities.map((e) => ({ ...e }));
+  const entities = state.entities.map((e) => {
+    const copy = { ...e };
+    if (copy.type === 'portal' && copy.hidden) {
+      copy.hidden = true;
+      copy.blockX = copy.blockX ?? copy.x;
+      copy.blockY = copy.blockY ?? copy.y;
+    }
+    return copy;
+  });
 
   return {
     id: -1,

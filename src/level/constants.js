@@ -17,6 +17,10 @@ export const isBlockBrushChar = (c) => BLOCK_BRUSH_VARIANTS.some((o) => o.value 
 /** Pushable block letters (2, A–D): can carry a hidden portal or power-up in the game JSON. */
 export const isEmbeddablePushableBlockChar = (c) => isBlockBrushChar(c) && c !== '1';
 
+/** Pushable — all directions (`2`): hidden bonus uses per-direction `targets` like breakable tiles. */
+export const OMNI_PUSHABLE_BLOCK_CHAR = '2';
+export const isOmniPushableBlockChar = (c) => c === OMNI_PUSHABLE_BLOCK_CHAR;
+
 /** Breakable destructible tile (`3`); may hide a power-up in the block (game JSON). */
 export const BREAKABLE_TILE_CHAR = '3';
 export const isBreakableTileChar = (c) => c === BREAKABLE_TILE_CHAR;

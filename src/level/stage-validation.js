@@ -79,13 +79,18 @@ export const validateLevelSlice = (slice) => {
       continue;
     }
 
+    const t = e.type;
+
     if (!e.hidden) {
       const k = `${ix},${iy}`;
-      if (seenCells.has(k)) errors.push(`Entity ${i + 1}: overlaps another entity at (${ix + 1},${iy + 1})`);
-      else seenCells.set(k, e.type);
+      const typesAt = seenCells.get(k);
+      const canShare =
+        (typesAt === 'woodstock' && t === 'ball') || (typesAt === 'ball' && t === 'woodstock');
+      if (typesAt != null && !canShare)
+        errors.push(`Entity ${i + 1}: overlaps another entity at (${ix + 1},${iy + 1})`);
+      else if (typesAt == null) seenCells.set(k, t);
+      else if (canShare) seenCells.set(k, 'woodstock+ball');
     }
-
-    const t = e.type;
     if (t === 'woodstock' || t === 'ball' || t === 'spike') {
       if (!e.hidden) toolbarCounts[t] = (toolbarCounts[t] || 0) + 1;
     }
