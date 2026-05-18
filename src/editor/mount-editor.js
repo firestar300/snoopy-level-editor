@@ -36,7 +36,9 @@ import {
   loadWorldStageIndex,
   persistActiveWorldStage,
   parseWorldDocumentFromImportData,
+  computeWorldStageReorderTargetIndex,
   removeWorldStageAt,
+  reorderWorldStage,
   serializeProjectForExport,
 } from '../level/world-project.js';
 import {
@@ -1148,6 +1150,7 @@ export const mountEditor = (root) => {
                       id="fld-music-preview"
                       class="editor__music-preview__audio"
                       controls
+                      controlsList="nodownload"
                       preload="metadata"
                       aria-label="Preview stage theme"
                     ></audio>
@@ -1496,7 +1499,171 @@ export const mountEditor = (root) => {
     els.musicPreview?.pause();
     render();
   });
+  const WORLD_STAGE_REORDER_DRAG_PX = 6;
+  /** @type {{ fromIdx: number, pointerId: number, startX: number, startY: number, active: boolean, card: HTMLElement, ghost: HTMLElement | null, offsetX: number, offsetY: number, stride: number, dropOverIdx: number, dropInsertAfter: boolean } | null} */
+  let worldStageReorderPointer = null;
+  let worldStageDidReorder = false;
+
+  const getWorldStageCardStride = () => {
+    const row = els.worldStagesRow;
+    if (!row) return 126;
+    const cards = [...row.querySelectorAll('.editor__world-stage-card')];
+    if (cards.length < 2) {
+      const one = cards[0]?.getBoundingClientRect();
+      return one ? one.width + 8 : 126;
+    }
+    const a = cards[0].getBoundingClientRect();
+    const b = cards[1].getBoundingClientRect();
+    if (Math.abs(b.top - a.top) < 4) return Math.max(b.left - a.left, a.width);
+    return a.width + 8;
+  };
+
+  const getWorldStageCardShiftPx = (cardIndex, fromIdx, targetIdx, stride) => {
+    if (cardIndex === fromIdx || targetIdx === fromIdx) return 0;
+    if (fromIdx < targetIdx && cardIndex > fromIdx && cardIndex <= targetIdx) return -stride;
+    if (fromIdx > targetIdx && cardIndex >= targetIdx && cardIndex < fromIdx) return stride;
+    return 0;
+  };
+
+  const clearWorldStageReorderVisuals = (drag) => {
+    document.body.classList.remove('editor--world-stage-dragging');
+    els.worldStagesRow?.classList.remove('editor__world-stages--reordering');
+    els.worldStagesRow?.querySelectorAll('.editor__world-stage-card').forEach((card) => {
+      card.classList.remove('editor__world-stage-card--drag-source');
+      card.style.transform = '';
+    });
+    drag?.ghost?.remove();
+    if (drag) drag.ghost = null;
+  };
+
+  const getWorldStageCardDropAt = (clientX) => {
+    const row = els.worldStagesRow;
+    if (!row) return null;
+    const cards = [...row.querySelectorAll('.editor__world-stage-card')];
+    if (!cards.length) return null;
+    for (let i = 0; i < cards.length; i++) {
+      const rect = cards[i].getBoundingClientRect();
+      if (clientX < rect.left + rect.width / 2) return { overIdx: i, insertAfter: false };
+    }
+    return { overIdx: cards.length - 1, insertAfter: true };
+  };
+
+  const applyWorldStageReorderPreview = (fromIdx, targetIdx) => {
+    const row = els.worldStagesRow;
+    if (!row) return;
+    const stride = worldStageReorderPointer?.stride ?? getWorldStageCardStride();
+    row.querySelectorAll('.editor__world-stage-card').forEach((card) => {
+      const i = parseInt(card.dataset.stageIndex, 10);
+      if (Number.isNaN(i)) return;
+      const shift = getWorldStageCardShiftPx(i, fromIdx, targetIdx, stride);
+      card.style.transform = shift === 0 ? '' : `translateX(${shift}px)`;
+    });
+  };
+
+  const moveWorldStageReorderGhost = (drag, clientX, clientY) => {
+    if (!drag.ghost) return;
+    drag.ghost.style.left = `${clientX - drag.offsetX}px`;
+    drag.ghost.style.top = `${clientY - drag.offsetY}px`;
+  };
+
+  const startWorldStageReorderVisual = (drag, ev) => {
+    const rect = drag.card.getBoundingClientRect();
+    drag.offsetX = ev.clientX - rect.left;
+    drag.offsetY = ev.clientY - rect.top;
+    drag.stride = getWorldStageCardStride();
+    const ghost = drag.card.cloneNode(true);
+    ghost.classList.add('editor__world-stage-ghost');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    drag.ghost = ghost;
+    drag.card.classList.add('editor__world-stage-card--drag-source');
+    els.worldStagesRow?.classList.add('editor__world-stages--reordering');
+    document.body.classList.add('editor--world-stage-dragging');
+    moveWorldStageReorderGhost(drag, ev.clientX, ev.clientY);
+    const targetIdx = computeWorldStageReorderTargetIndex(
+      drag.fromIdx,
+      drag.dropOverIdx,
+      drag.dropInsertAfter,
+    );
+    applyWorldStageReorderPreview(drag.fromIdx, targetIdx);
+  };
+
+  const finishWorldStageReorderPointer = (ev) => {
+    const drag = worldStageReorderPointer;
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    worldStageReorderPointer = null;
+    try {
+      drag.card.releasePointerCapture(ev.pointerId);
+    } catch {
+      /* already released */
+    }
+    const toIndex = drag.active
+      ? computeWorldStageReorderTargetIndex(drag.fromIdx, drag.dropOverIdx, drag.dropInsertAfter)
+      : drag.fromIdx;
+    clearWorldStageReorderVisuals(drag);
+    if (!drag.active) return;
+    if (toIndex !== drag.fromIdx && reorderWorldStage(state, drag.fromIdx, toIndex)) {
+      worldStageDidReorder = true;
+      render();
+    }
+  };
+
+  els.worldStagesRow?.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    if (ev.target.closest('[data-action="world-remove-stage"]')) return;
+    const card = ev.target.closest('.editor__world-stage-card');
+    if (!card) return;
+    const fromIdx = parseInt(card.dataset.stageIndex, 10);
+    if (Number.isNaN(fromIdx)) return;
+    worldStageDidReorder = false;
+    worldStageReorderPointer = {
+      fromIdx,
+      pointerId: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      active: false,
+      card,
+      ghost: null,
+      offsetX: 0,
+      offsetY: 0,
+      stride: 0,
+      dropOverIdx: fromIdx,
+      dropInsertAfter: false,
+    };
+  });
+
+  document.addEventListener('pointermove', (ev) => {
+    const drag = worldStageReorderPointer;
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    const dx = ev.clientX - drag.startX;
+    const dy = ev.clientY - drag.startY;
+    if (!drag.active) {
+      if (Math.hypot(dx, dy) < WORLD_STAGE_REORDER_DRAG_PX) return;
+      drag.active = true;
+      drag.card.setPointerCapture(ev.pointerId);
+      startWorldStageReorderVisual(drag, ev);
+    }
+    ev.preventDefault();
+    moveWorldStageReorderGhost(drag, ev.clientX, ev.clientY);
+    const drop = getWorldStageCardDropAt(ev.clientX);
+    if (!drop) return;
+    drag.dropOverIdx = drop.overIdx;
+    drag.dropInsertAfter = drop.insertAfter;
+    const targetIdx = computeWorldStageReorderTargetIndex(drag.fromIdx, drop.overIdx, drop.insertAfter);
+    applyWorldStageReorderPreview(drag.fromIdx, targetIdx);
+  });
+
+  document.addEventListener('pointerup', finishWorldStageReorderPointer);
+  document.addEventListener('pointercancel', finishWorldStageReorderPointer);
+
   els.worldStagesRow?.addEventListener('click', (ev) => {
+    if (worldStageDidReorder) {
+      worldStageDidReorder = false;
+      return;
+    }
+    if (worldStageReorderPointer?.active) return;
     const delBtn = ev.target.closest('[data-action="world-remove-stage"]');
     if (delBtn) {
       const idx = parseInt(delBtn.dataset.stageIndex, 10);
@@ -2587,6 +2754,7 @@ export const mountEditor = (root) => {
       const prev = document.createElement('canvas');
       prev.className = 'editor__world-stage-preview';
       prev.setAttribute('aria-hidden', 'true');
+      prev.draggable = false;
       drawStagePreviewOnCanvas(prev, slice);
 
       const wrap = document.createElement('div');
@@ -2604,8 +2772,15 @@ export const mountEditor = (root) => {
         wrap.appendChild(bad);
       }
 
+      const dragHandle = document.createElement('span');
+      dragHandle.className = 'editor__world-stage-drag-handle material-symbols-outlined';
+      dragHandle.setAttribute('aria-hidden', 'true');
+      dragHandle.title = 'Drag to reorder';
+      dragHandle.textContent = 'drag_indicator';
+
       const meta = document.createElement('div');
       meta.className = 'editor__world-stage-meta';
+      meta.appendChild(dragHandle);
       const title = document.createElement('span');
       title.className = 'editor__world-stage-title';
       const rawName = String(slice.name || '').trim();

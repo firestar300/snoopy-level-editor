@@ -94,6 +94,45 @@ export const removeWorldStageAt = (state, removeIdx) => {
   return true;
 };
 
+/**
+ * Target index in `stages` after dropping a card (before/after a hovered card).
+ * @param {number} fromIdx
+ * @param {number} overIdx
+ * @param {boolean} insertAfter
+ * @returns {number}
+ */
+export const computeWorldStageReorderTargetIndex = (fromIdx, overIdx, insertAfter) => {
+  let target = insertAfter ? overIdx + 1 : overIdx;
+  if (fromIdx < target) target -= 1;
+  return target;
+};
+
+/**
+ * Move a stage from one index to another and keep the active stage selection in sync.
+ * @param {object} state
+ * @param {number} fromIndex
+ * @param {number} toIndex
+ * @returns {boolean}
+ */
+export const reorderWorldStage = (state, fromIndex, toIndex) => {
+  persistActiveWorldStage(state);
+  const w = state.world;
+  if (!w?.stages?.length) return false;
+  const len = w.stages.length;
+  if (fromIndex < 0 || fromIndex >= len || toIndex < 0 || toIndex >= len) return false;
+  if (fromIndex === toIndex) return false;
+  const [item] = w.stages.splice(fromIndex, 1);
+  w.stages.splice(toIndex, 0, item);
+  const active = w.activeStageIndex;
+  let newActive = active;
+  if (active === fromIndex) newActive = toIndex;
+  else if (fromIndex < active && toIndex >= active) newActive = active - 1;
+  else if (fromIndex > active && toIndex <= active) newActive = active + 1;
+  w.activeStageIndex = newActive;
+  applyLevelSliceToState(state, w.stages[w.activeStageIndex]);
+  return true;
+};
+
 export const allWorldStagesValid = (state) => {
   persistActiveWorldStage(state);
   for (let i = 0; i < state.world.stages.length; i++) {
