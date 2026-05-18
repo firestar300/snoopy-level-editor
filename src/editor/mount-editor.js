@@ -1109,7 +1109,7 @@ export const mountEditor = (root) => {
             <h2 id="sidebar-section-modes" class="editor__sidebar-section-title">Modes</h2>
             <div class="editor__tool-modes editor__tool-modes--tile" role="group" aria-label="Tile interaction">
               <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-add" aria-label="Add tiles">
-                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">add</span>
+                <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">add_box</span>
                 <span class="editor__mode-label">Add</span>
               </button>
               <button type="button" class="editor__btn editor__btn--mode-tile" data-mode="tile-select" aria-label="Select tile on grid">
@@ -1124,7 +1124,7 @@ export const mountEditor = (root) => {
           </section>
           <section class="editor__sidebar-section" aria-labelledby="sidebar-section-stage">
             <h2 id="sidebar-section-stage" class="editor__sidebar-section-title">Stage</h2>
-            <details class="editor__accordion editor__accordion--settings">
+            <details class="editor__accordion editor__accordion--settings" open>
               <summary
                 class="editor__btn editor__btn--mode-tile editor__btn--sidebar-settings"
                 aria-label="Stage settings — show or hide"
@@ -2056,8 +2056,7 @@ export const mountEditor = (root) => {
         on =
           state.tool.mode === 'tile' &&
           te === 'add' &&
-          isBlockBrushChar(state.tool.char) &&
-          !isBlockPushableToolbarShortcutChar(state.tool.char);
+          state.tool.char === '1';
       else {
         on = state.tool.mode === 'tile' && te === 'add' && state.tool.char === ch;
         if (ch === TELEPORT_TILE_A)
@@ -2941,16 +2940,22 @@ export const mountEditor = (root) => {
     const btn = ev.target.closest('.editor__tile-btn--tile');
     if (!btn || btn.disabled) return;
     const te = getTileEdit(state);
-    if (btn.dataset.blockBrush != null)
-      state.tool = { mode: 'tile', char: state.blockVariant, tileEdit: te === 'select' ? 'add' : te };
-    else if (btn.dataset.char) {
+    const switchToAdd = te !== 'add';
+    if (btn.dataset.blockBrush != null) {
+      state.blockVariant = '1';
+      state.blockBrushEmbed = 'none';
+      state.blockBrushPickingPortalExit = false;
+      state.blockBrushPickingHiddenPowerupExit = false;
+      state.blockBrushPickingHiddenPowerupExitDir = null;
+      state.tool = { mode: 'tile', char: '1', tileEdit: 'add' };
+    } else if (btn.dataset.char) {
       const nextChar = btn.dataset.char;
       if (isBlockBrushChar(nextChar)) state.blockVariant = nextChar;
-      state.tool = { mode: 'tile', char: nextChar, tileEdit: te === 'select' ? 'add' : te };
+      state.tool = { mode: 'tile', char: nextChar, tileEdit: 'add' };
     }
     else return;
     state.selectedEntityIndex = null;
-    if (te === 'select') {
+    if (switchToAdd) {
       state.selectedTileCell = null;
       state.inspectPlayerStart = false;
       clearTileMoveDrag();
