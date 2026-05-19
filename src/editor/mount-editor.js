@@ -1122,14 +1122,19 @@ const resetActiveStageToEmpty = (state) => {
   persistActiveWorldStage(state);
 };
 
-/** True when the active stage is already empty and editor chrome is default (Clear stage disabled). */
-const isClearStageButtonDisabled = (state) => {
-  persistActiveWorldStage(state);
-  const ref = createInitialState();
-  const levelNum = (state.world?.activeStageIndex ?? 0) + 1;
-  const empty = createEmptyLevelSlice(levelNum);
-  const active = state.world?.stages?.[state.world.activeStageIndex];
-  if (!active || !levelSlicesEqual(active, empty)) return false;
+/** Reset the whole project to a single empty stage and default editor chrome. */
+const resetWorldToInitial = (state) => {
+  const fresh = createInitialState();
+  state.world = {
+    name: fresh.world.name,
+    activeStageIndex: 0,
+    stages: fresh.world.stages.map((s) => deepCloneLevelSlice(s)),
+  };
+  applyLevelSliceToState(state, deepCloneLevelSlice(state.world.stages[0]));
+  resetEditorChromeToInitial(state);
+};
+
+const isEditorChromeAtInitial = (state, ref) => {
   if (state.tool.mode !== 'tile' || state.tool.char !== ref.tool.char || state.tool.tileEdit !== ref.tool.tileEdit)
     return false;
   if (state.selectedTileCell != null) return false;
@@ -1159,6 +1164,30 @@ const isClearStageButtonDisabled = (state) => {
   if (state.selectedEntityIndex != null) return false;
   if (state.inspectPlayerStart !== ref.inspectPlayerStart) return false;
   return true;
+};
+
+/** True when the project matches `createInitialState()` (New world disabled). */
+const isEditorAtInitialState = (state) => {
+  persistActiveWorldStage(state);
+  const ref = createInitialState();
+  const w = state.world;
+  if (!w?.stages?.length) return false;
+  if (w.name !== ref.world.name) return false;
+  if (w.activeStageIndex !== 0) return false;
+  if (w.stages.length !== 1) return false;
+  if (!levelSlicesEqual(w.stages[0], ref.world.stages[0])) return false;
+  return isEditorChromeAtInitial(state, ref);
+};
+
+/** True when the active stage is already empty and editor chrome is default (Clear stage disabled). */
+const isClearStageButtonDisabled = (state) => {
+  persistActiveWorldStage(state);
+  const ref = createInitialState();
+  const levelNum = (state.world?.activeStageIndex ?? 0) + 1;
+  const empty = createEmptyLevelSlice(levelNum);
+  const active = state.world?.stages?.[state.world.activeStageIndex];
+  if (!active || !levelSlicesEqual(active, empty)) return false;
+  return isEditorChromeAtInitial(state, ref);
 };
 
 export const mountEditor = (root) => {
@@ -1197,6 +1226,16 @@ export const mountEditor = (root) => {
         <aside class="editor__sidebar" aria-label="Tools">
           <section class="editor__sidebar-section" aria-labelledby="sidebar-section-file">
             <h2 id="sidebar-section-file" class="editor__sidebar-section-title">File</h2>
+            <button
+              type="button"
+              class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--new-world"
+              data-action="new-world-open"
+              aria-haspopup="dialog"
+              aria-controls="editor-dialog-new-world"
+            >
+              <span class="material-symbols-outlined editor__mode-glyph" aria-hidden="true">note_add</span>
+              <span class="editor__mode-label">New world</span>
+            </button>
             <label
               for="fld-import-map"
               class="editor__btn editor__btn--full editor__btn--mode-tile editor__btn--sidebar-import"
@@ -1520,6 +1559,26 @@ export const mountEditor = (root) => {
         </aside>
       </div>
       <dialog
+        id="editor-dialog-new-world"
+        class="editor__dialog"
+        aria-labelledby="editor-dialog-new-world-title"
+      >
+        <div class="editor__dialog-panel">
+          <h3 id="editor-dialog-new-world-title" class="editor__dialog-title">Start a new world?</h3>
+          <p class="editor__dialog-text">
+            The entire project will be reset: all stages removed, one empty stage, and default settings. This
+            cannot be undone.
+          </p>
+          <div class="editor__dialog-actions">
+            <button type="button" class="editor__btn" data-action="new-world-cancel">Cancel</button>
+            <button type="button" class="editor__btn editor__btn--danger" data-action="new-world-confirm">
+              <span class="material-symbols-outlined editor__dialog-confirm-icon" aria-hidden="true">note_add</span>
+              New world
+            </button>
+          </div>
+        </div>
+      </dialog>
+      <dialog
         id="editor-dialog-clear-stage"
         class="editor__dialog"
         aria-labelledby="editor-dialog-clear-stage-title"
@@ -1579,6 +1638,11 @@ export const mountEditor = (root) => {
     powerupExitPanel: root.querySelector('[data-powerup-exit]'),
     powerupPickBanner: root.querySelector('[data-powerup-pick-banner]'),
     gridWrap: root.querySelector('[data-grid-wrap]'),
+    dialogNewWorld: root.querySelector('#editor-dialog-new-world'),
+    btnNewWorldOpen: root.querySelector('[data-action="new-world-open"]'),
+    btnNewWorldCancel: root.querySelector('[data-action="new-world-cancel"]'),
+    btnNewWorldConfirm: root.querySelector('[data-action="new-world-confirm"]'),
+    fldImportMap: root.querySelector('#fld-import-map'),
     dialogClearStage: root.querySelector('#editor-dialog-clear-stage'),
     btnClearStageOpen: root.querySelector('[data-action="clear-stage-open"]'),
     btnClearStageCancel: root.querySelector('[data-action="clear-stage-cancel"]'),
@@ -1592,6 +1656,24 @@ export const mountEditor = (root) => {
     state.tileMoveDrag = null;
     els.gridWrap.classList.remove('editor__grid-wrap--tile-moving');
   };
+
+  els.btnNewWorldOpen?.addEventListener('click', () => {
+    els.dialogNewWorld?.showModal();
+  });
+  els.btnNewWorldCancel?.addEventListener('click', () => {
+    els.dialogNewWorld?.close();
+  });
+  els.btnNewWorldConfirm?.addEventListener('click', () => {
+    resetWorldToInitial(state);
+    clearTileMoveDrag();
+    els.musicPreview?.pause();
+    if (els.fldImportMap) els.fldImportMap.value = '';
+    els.dialogNewWorld?.close();
+    render();
+  });
+  els.dialogNewWorld?.addEventListener('close', () => {
+    queueMicrotask(() => els.btnNewWorldOpen?.focus());
+  });
 
   els.btnClearStageOpen?.addEventListener('click', () => {
     els.dialogClearStage?.showModal();
@@ -3125,6 +3207,13 @@ export const mountEditor = (root) => {
     renderWorldStrip();
     els.fldJson.value = serializeProjectForExport(state);
     renderInspector();
+    if (els.btnNewWorldOpen) {
+      const atInitial = isEditorAtInitialState(state);
+      els.btnNewWorldOpen.disabled = atInitial;
+      els.btnNewWorldOpen.title = atInitial
+        ? 'The project is already a new empty world.'
+        : 'Reset the project to one empty stage and default settings.';
+    }
     if (els.btnClearStageOpen) {
       const pristine = isClearStageButtonDisabled(state);
       els.btnClearStageOpen.disabled = pristine;

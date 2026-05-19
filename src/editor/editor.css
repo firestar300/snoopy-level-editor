@@ -764,6 +764,10 @@ body {
   line-height: 1;
 }
 
+.editor__btn--new-world {
+  margin-bottom: 0.5rem;
+}
+
 label.editor__btn--sidebar-import {
   margin: 0;
   cursor: pointer;
@@ -1397,7 +1401,7 @@ label.editor__btn--sidebar-import:focus-within {
     margin-bottom: 0.4rem;
   }
 
-  .editor__btn--mode-tile:not(.editor__btn--sidebar-settings):not(.editor__btn--clear-stage):not(.editor__btn--sidebar-import) {
+  .editor__btn--mode-tile:not(.editor__btn--sidebar-settings):not(.editor__btn--clear-stage):not(.editor__btn--sidebar-import):not(.editor__btn--new-world) {
     flex: 1 1 calc(33.333% - 0.3rem);
     min-width: 0;
     min-height: 2.75rem;
@@ -1406,7 +1410,8 @@ label.editor__btn--sidebar-import:focus-within {
   }
 
   .editor__btn--clear-stage,
-  .editor__btn--sidebar-import {
+  .editor__btn--sidebar-import,
+  .editor__btn--new-world {
     flex: 1 1 100%;
     min-height: 2.75rem;
     justify-content: flex-start;
